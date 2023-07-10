@@ -6,14 +6,22 @@ You can find details in the paper [Scaling Speech Technology to 1000+ languages]
 
 An overview of the languages covered by MMS can be found [here](https://dl.fbaipublicfiles.com/mms/misc/language_coverage_mms.html).
 
+## 🤗 Transformers
+
+MMS has been added to Transformers. For more information, please refer to [Transformers' MMS docs](https://huggingface.co/docs/transformers/main/en/model_doc/mms).
+
+[Click here](https://huggingface.co/models?other=mms) to find all MMS checkpoints on the Hub. 
+
+Checkout the demo here [![Open In HF Spaces](https://huggingface.co/datasets/huggingface/badges/raw/main/open-in-hf-spaces-sm-dark.svg)](https://huggingface.co/spaces/facebook/MMS) 
+
 ## Finetuned models
 ### ASR
 
-| Model | Languages | Dataset | Model | Dictionary* | Supported languages |
-|---|---|---|---|---|---
-MMS-1B:FL102 | 102 | FLEURS | [download](https://dl.fbaipublicfiles.com/mms/asr/mms1b_fl102.pt) | [download](https://dl.fbaipublicfiles.com/mms/asr/dict/mms1b_fl102/eng.txt) | [download](https://dl.fbaipublicfiles.com/mms/asr/mms1b_fl102_langs.html) 
-MMS-1B:L1107| 1107 | MMS-lab | [download](https://dl.fbaipublicfiles.com/mms/asr/mms1b_l1107.pt) | [download](https://dl.fbaipublicfiles.com/mms/asr/dict/mms1b_l1107/eng.txt)  | [download](https://dl.fbaipublicfiles.com/mms/asr/mms1b_l1107_langs.html) 
-MMS-1B-all| 1162 | MMS-lab + FLEURS <br>+ CV + VP + MLS |  [download](https://dl.fbaipublicfiles.com/mms/asr/mms1b_all.pt) | [download](https://dl.fbaipublicfiles.com/mms/asr/dict/mms1b_all/eng.txt) | [download](https://dl.fbaipublicfiles.com/mms/asr/mms1b_all_langs.html)
+| Model | Languages | Dataset | Model | Dictionary* | Supported languages |  |
+|---|---|---|---|---|---|---
+MMS-1B:FL102 | 102 | FLEURS | [download](https://dl.fbaipublicfiles.com/mms/asr/mms1b_fl102.pt) | [download](https://dl.fbaipublicfiles.com/mms/asr/dict/mms1b_fl102/eng.txt) | [download](https://dl.fbaipublicfiles.com/mms/asr/mms1b_fl102_langs.html) | [🤗 Hub](https://huggingface.co/facebook/mms-1b-fl102)
+MMS-1B:L1107| 1107 | MMS-lab | [download](https://dl.fbaipublicfiles.com/mms/asr/mms1b_l1107.pt) | [download](https://dl.fbaipublicfiles.com/mms/asr/dict/mms1b_l1107/eng.txt)  | [download](https://dl.fbaipublicfiles.com/mms/asr/mms1b_l1107_langs.html) | [🤗 Hub](https://huggingface.co/facebook/mms-1b-l1107)
+MMS-1B-all| 1162 | MMS-lab + FLEURS <br>+ CV + VP + MLS |  [download](https://dl.fbaipublicfiles.com/mms/asr/mms1b_all.pt) | [download](https://dl.fbaipublicfiles.com/mms/asr/dict/mms1b_all/eng.txt) | [download](https://dl.fbaipublicfiles.com/mms/asr/mms1b_all_langs.html) | [🤗 Hub](https://huggingface.co/facebook/mms-1b-all)
 
 \* In the `Dictionary` column, we provide the download link for token dictionary in English language. To download token dictionary for a different language supported by the model, modify the language code in the URL appropriately. For example, to get token dictionary of FL102 model for Hindi language, use [this](https://dl.fbaipublicfiles.com/mms/asr/dict/mms1b_fl102/hin.txt) link. 
 
@@ -25,17 +33,23 @@ MMS-1B-all| 1162 | MMS-lab + FLEURS <br>+ CV + VP + MLS |  [download](https://dl
 wget https://dl.fbaipublicfiles.com/mms/tts/eng.tar.gz # English (eng)
 wget https://dl.fbaipublicfiles.com/mms/tts/azj-script_latin.tar.gz # North Azerbaijani (azj-script_latin)
 ```
+The above command downloads generator only, which is enough to run TTS inference. If you want the full model checkpoint which also includes the discriminator (`D_100000.pth`) and the optimizer states, download as follows.
+```
+# Example (full checkpoint: generator + discriminator + optimizer):
+wget https://dl.fbaipublicfiles.com/mms/tts/full_model/eng.tar.gz # English (eng)
+```
+
 
 ### LID
 
-\# Languages | Dataset | Model | Dictionary | Supported languages |
-|---|---|---|---|---
-126 | FLEURS + VL + MMS-lab-U + MMS-unlab | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l126.pt) | [download](https://dl.fbaipublicfiles.com/mms/lid/dict/l126/dict.lang.txt) | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l126_langs.html)
-256 | FLEURS + VL + MMS-lab-U + MMS-unlab | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l256.pt) | [download](https://dl.fbaipublicfiles.com/mms/lid/dict/l256/dict.lang.txt) | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l256_langs.html)
-512 | FLEURS + VL + MMS-lab-U + MMS-unlab | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l512.pt) | [download](https://dl.fbaipublicfiles.com/mms/lid/dict/l512/dict.lang.txt) | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l512_langs.html)
-1024 | FLEURS + VL + MMS-lab-U + MMS-unlab | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l1024.pt) | [download](https://dl.fbaipublicfiles.com/mms/lid/dict/l1024/dict.lang.txt) | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l1024_langs.html)
-2048 | FLEURS + VL + MMS-lab-U + MMS-unlab | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l2048.pt) | [download](https://dl.fbaipublicfiles.com/mms/lid/dict/l2048/dict.lang.txt) | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l2048_langs.html)
-4017 | FLEURS + VL + MMS-lab-U + MMS-unlab | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l4017.pt) | [download](https://dl.fbaipublicfiles.com/mms/lid/dict/l4017/dict.lang.txt) | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l4017_langs.html)
+\# Languages | Dataset | Model | Dictionary | Supported languages | |
+|---|---|---|---|---|---
+126 | FLEURS + VL + MMS-lab-U + MMS-unlab | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l126.pt) | [download](https://dl.fbaipublicfiles.com/mms/lid/dict/l126/dict.lang.txt) | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l126_langs.html) | [🤗 Hub](https://huggingface.co/facebook/mms-lid-126)
+256 | FLEURS + VL + MMS-lab-U + MMS-unlab | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l256.pt) | [download](https://dl.fbaipublicfiles.com/mms/lid/dict/l256/dict.lang.txt) | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l256_langs.html) | [🤗 Hub](https://huggingface.co/facebook/mms-lid-256)
+512 | FLEURS + VL + MMS-lab-U + MMS-unlab | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l512.pt) | [download](https://dl.fbaipublicfiles.com/mms/lid/dict/l512/dict.lang.txt) | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l512_langs.html)| [🤗 Hub](https://huggingface.co/facebook/mms-lid-512)
+1024 | FLEURS + VL + MMS-lab-U + MMS-unlab | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l1024.pt) | [download](https://dl.fbaipublicfiles.com/mms/lid/dict/l1024/dict.lang.txt) | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l1024_langs.html)| [🤗 Hub](https://huggingface.co/facebook/mms-lid-1024)
+2048 | FLEURS + VL + MMS-lab-U + MMS-unlab | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l2048.pt) | [download](https://dl.fbaipublicfiles.com/mms/lid/dict/l2048/dict.lang.txt) | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l2048_langs.html)| [🤗 Hub](https://huggingface.co/facebook/mms-lid-2048)
+4017 | FLEURS + VL + MMS-lab-U + MMS-unlab | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l4017.pt) | [download](https://dl.fbaipublicfiles.com/mms/lid/dict/l4017/dict.lang.txt) | [download](https://dl.fbaipublicfiles.com/mms/lid/mms1b_l4017_langs.html)| [🤗 Hub](https://huggingface.co/facebook/mms-lid-4017)
 
 ## Commands to run inference 
 
@@ -58,10 +72,12 @@ dev.ltr
 dev.uid
 
 # dev.tsv each line contains <audio>  <number_of_sample>
+# if user don't have this information, please run misc/get_sample_size.py
+
 $ cat dev.tsv
 /
-/path/to/audio_1  180000
-/path/to/audio_2  200000
+/path/to/audio_1.wav  180000
+/path/to/audio_2.wav  200000
 
 $ cat dev.ltr
 t h i s | i s | o n e |
@@ -96,7 +112,8 @@ Available options:
   cd bindings/python 
   python3 setup.py install
   ```
-  Train a [KenLM language model](https://github.com/flashlight/wav2letter/tree/main/recipes/rasr#language-model) and prepare a lexicon file in [this](https://dl.fbaipublicfiles.com/wav2letter/rasr/tutorial/lexicon.txt) format. 
+  Train a [KenLM language model](https://github.com/flashlight/wav2letter/tree/main/recipes/rasr#language-model) and prepare a lexicon file in [this](https://dl.fbaipublicfiles.com/wav2letter/rasr/tutorial/lexicon.txt) format. Pretrained languages models from our paper can be found in [🤗 Hub](https://huggingface.co/facebook/mms-cclms/).
+  
   ```
    LANG=<iso> # for example - 'eng', 'azj-script_latin'
    PYTHONPATH=. PREFIX=INFER HYDRA_FULL_ERROR=1  python examples/speech_recognition/new/infer.py  --config-dir=examples/mms/asr/config \
@@ -153,14 +170,20 @@ $  PYTHONPATH='.'  python3  examples/mms/lid/infer.py /path/to/dict/l126/ --path
 The above command assumes there is a file named `dict.lang.txt` in `/path/to/dict/l126/`. `<OUTDIR>/predictions.txt` will contain the predictions from the model for the audio files in `manifest.tsv`. 
 
 We also provide an Ipython notebook example inside `lid/tutorial` folder [ipynb](https://github.com/facebookresearch/fairseq/blob/main/examples/mms/lid/tutorial/MMS_LID_Inference_Colab.ipynb) or [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/facebookresearch/fairseq/blob/main/examples/mms/lid/tutorial/MMS_LID_Inference_Colab.ipynb) 
-  
+
+## Fine-tuning
+
+### ASR
+
+MMS Adapter fine-tuning has been added to the official 🤗 Transformers examples [here](https://github.com/huggingface/transformers/tree/main/examples/pytorch/speech-recognition#connectionist-temporal-classification-with-adapters).
+For a more step-by-step explanation of how to fine-tune MMS, please have a look at the blog [**Fine-tuning MMS Adapter Models for Multi-Lingual ASR**](https://huggingface.co/blog/mms_adapters) on 🤗 blogs.
   
 ## Pretrained models
 
-| Model | Link
-|---|---
-MMS-300M | [download](https://dl.fbaipublicfiles.com/mms/pretraining/base_300m.pt)
-MMS-1B | [download](https://dl.fbaipublicfiles.com/mms/pretraining/base_1b.pt)
+| Model | Link | |
+|---|---|---
+MMS-300M | [download](https://dl.fbaipublicfiles.com/mms/pretraining/base_300m.pt) | [🤗 Hub](https://huggingface.co/facebook/mms-300m)
+MMS-1B | [download](https://dl.fbaipublicfiles.com/mms/pretraining/base_1b.pt) | [🤗 Hub](https://huggingface.co/facebook/mms-1b)
 
 Example commands to finetune the pretrained models can be found [here](https://github.com/facebookresearch/fairseq/tree/main/examples/wav2vec#fine-tune-a-pre-trained-model-with-ctc).
 
