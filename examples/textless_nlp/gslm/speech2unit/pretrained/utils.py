@@ -62,7 +62,9 @@ def get_feature_iterator(
         def iterate():
             for file_path in file_path_list:
                 feats = reader.get_feats(file_path, channel_id=channel_id)
-                yield feats.cpu().numpy()
+                if feats is not None:
+                    yield feats.cpu().numpy()
+                
 
     return iterate, num_files
 

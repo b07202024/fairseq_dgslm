@@ -28,6 +28,13 @@ def get_parser():
         help="percentage of data to use as validation set (between 0 and 1)",
     )
     parser.add_argument(
+        "--test-percent",
+        default=0.01,
+        type=float,
+        metavar="T",
+        help="percentage of data to use as testing set (between 0 and 1)",
+    )
+    parser.add_argument(
         "--dest", default=".", type=str, metavar="DIR", help="output directory"
     )
     parser.add_argument(
@@ -59,12 +66,19 @@ def main(args):
         if args.valid_percent > 0
         else None
     )
-
+    test_f = (
+        open(os.path.join(args.dest, "test.tsv"), "w")
+        if args.test_percent > 0
+        else None
+    )
     with open(os.path.join(args.dest, "train.tsv"), "w") as train_f:
         print(dir_path, file=train_f)
 
         if valid_f is not None:
             print(dir_path, file=valid_f)
+
+        if test_f is not None:
+            print(dir_path, file=test_f)
 
         for fname in glob.iglob(search_path, recursive=True):
             file_path = os.path.realpath(fname)
@@ -73,12 +87,20 @@ def main(args):
                 continue
 
             frames = soundfile.info(fname).frames
-            dest = train_f if rand.random() > args.valid_percent else valid_f
+            n = rand.random()
+            if n > args.valid_percent + args.test_percent:
+                dest = train_f
+            elif n > args.test_percent:
+                dest = valid_f
+            else:
+                dest = test_f
             print(
                 "{}\t{}".format(os.path.relpath(file_path, dir_path), frames), file=dest
             )
     if valid_f is not None:
         valid_f.close()
+    if test_f is not None:
+        test_f.close()
 
 
 if __name__ == "__main__":

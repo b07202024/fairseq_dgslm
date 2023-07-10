@@ -95,6 +95,12 @@ class SpeechDLMConfig(FairseqDataclass):
             "help": "Perform Duration Prediction, expected str input ('True' or 'False')"
         },
     )
+    ctc_prediction: str = field(
+        default="False",
+        metadata={
+            "help": "Perform CTC Prediction, expected str input ('True' or 'False')"
+        },
+    )
     delayed_duration_target: str = field(
         default="True",
         metadata={
@@ -160,10 +166,11 @@ class SpeechDLMTask(LegacyFairseqTask):
         at examples/textless_nlp/dgslm .
     """
 
-    def __init__(self, args, dicts, output_dicts=None, targets=None):
+    def __init__(self, args, dicts, output_dicts=None, ctc_dicts=None, targets=None):
         super().__init__(args)
         self.dicts = dicts
         self.output_dicts = output_dicts or dicts
+        self.ctc_dicts = ctc_dicts
 
         if targets is None:
             targets = ["next"]
@@ -195,6 +202,10 @@ class SpeechDLMTask(LegacyFairseqTask):
             "true",
             "false",
         ], f"Expected to be a string of boolean, found {args.delayed_duration_target}"
+        assert str(args.ctc_prediction).lower() in [
+            "true",
+            "false",
+        ], f"Expected to be a string of boolean, found {args.ctc_prediction}"
         self.next_unit_prediction = bool(
             str(args.next_unit_prediction).lower() == "true"
         )
@@ -205,6 +216,9 @@ class SpeechDLMTask(LegacyFairseqTask):
         self.delayed_duration_target = bool(
             str(args.delayed_duration_target).lower() == "true"
         )
+        self.ctc_prediction = bool(str(args.ctc_prediction).lower() == "true")
+        if self.ctc_prediction:
+            assert ctc_dicts is not None
 
         self.max_target_durations = args.max_target_durations
 
@@ -231,24 +245,38 @@ class SpeechDLMTask(LegacyFairseqTask):
         # load dictionaries
         dicts = OrderedDict()
         output_dicts = OrderedDict()
+        if args.ctc_prediction == "True":
+            ctc_dicts = OrderedDict()
         for channel in sorted_channels:
-            dictionary = Dictionary.load(
+            unit_dict = Dictionary.load(
                 os.path.join(data_path, "dict.{}.txt".format(channel))
             )
-            logger.info("[{}] dictionary: {} types".format(channel, len(dictionary)))
-            output_dictionary = dictionary
+            logger.info("[{}] dictionary: {} types".format(channel, len(unit_dict)))
+
+            if args.ctc_prediction == "True":
+                text_dict = Dictionary.load(
+                    os.path.join(data_path, "dict.{}.txt".format(channel.replace("unit", "text")))
+                )
+                logger.info("[{}] dictionary: {} types".format(channel.replace("unit", "text"), len(text_dict)))
+            
+            output_dictionary = unit_dict
             if args.output_dictionary_size >= 0:
                 output_dictionary = TruncatedDictionary(
-                    dictionary, args.output_dictionary_size
+                    unit_dict, args.output_dictionary_size
                 )
-            dicts[channel] = dictionary
+            dicts[channel] = unit_dict
             output_dicts[channel] = output_dictionary
+            if args.ctc_prediction == "True":
+                ctc_dicts[channel] = text_dict
             if len(dicts) > 0:
                 assert dicts[channel].pad() == dicts[sorted_channels[0]].pad()
                 assert dicts[channel].bos() == dicts[sorted_channels[0]].bos()
                 assert dicts[channel].eos() == dicts[sorted_channels[0]].eos()
                 assert dicts[channel].unk() == dicts[sorted_channels[0]].unk()
-        return (dicts, output_dicts)
+        if args.ctc_prediction == "True":
+            return (dicts, output_dicts, ctc_dicts)
+        else:
+            return (dicts, output_dicts, None)
 
     @classmethod
     def setup_task(cls, args, **kwargs):
@@ -257,7 +285,7 @@ class SpeechDLMTask(LegacyFairseqTask):
         Args:
             args (argparse.Namespace): parsed command-line arguments
         """
-        dicts, output_dicts = cls.setup_dictionary(args, **kwargs)
+        dicts, output_dicts, ctc_dicts = cls.setup_dictionary(args, **kwargs)
 
         targets = []
         if str(getattr(args, "next_unit_prediction", "false")).lower() == "true":
@@ -266,11 +294,13 @@ class SpeechDLMTask(LegacyFairseqTask):
             targets.append("edge")
         if str(getattr(args, "duration_prediction", "false")).lower() == "true":
             targets.append("duration")
+        if str(getattr(args, "ctc_prediction", "false")).lower() == "true":
+            targets.append("duration")
         if len(targets) == 0:
             # standard language modeling
             targets = ["next"]
 
-        return cls(args, dicts, output_dicts, targets=targets)
+        return cls(args, dicts, output_dicts, ctc_dicts=ctc_dicts, targets=targets)
 
     def build_model(self, args):
         model = super().build_model(args)
@@ -500,6 +530,12 @@ class SpeechDLMTask(LegacyFairseqTask):
         """Return the :class:`~fairseq.data.Dictionary` for the language
         model."""
         return self.output_dicts[self.channels[0]]
+    
+    @property
+    def text_dictionary(self):
+        """Return the :class:`~fairseq.data.Dictionary` for the language
+        model."""
+        return self.ctc_dicts[self.channels[0]]
 
     @property
     def source_dictionaries(self):

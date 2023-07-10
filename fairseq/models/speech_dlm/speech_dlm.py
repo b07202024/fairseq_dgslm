@@ -115,6 +115,12 @@ class SpeechDLMConfig(FairseqDataclass):
             "help": "scalar quantization noise and scalar quantization at training time"
         },
     )
+    ctc_prediction: str = field(
+        default="False",
+        metadata={
+            "help": "add ctc asr during training"
+        },
+    )
     add_bos_token: bool = II("task.add_bos_token")
     tokens_per_sample: int = II("task.tokens_per_sample")
     max_target_positions: Optional[int] = II("task.max_target_positions")
@@ -170,6 +176,7 @@ class SpeechDLM(FairseqLanguageModel):
             embed_tokens,
             channels=task.channels,
             no_encoder_attn=True,
+            text_dictionary=task.text_dictionary,
         )
         return cls(decoder)
 

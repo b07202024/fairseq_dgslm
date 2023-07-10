@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import torch
+import librosa
 import fairseq
 import soundfile as sf
 import torch.nn.functional as F
@@ -33,6 +34,7 @@ class HubertFeatureReader:
 
     def read_audio(self, path, ref_len=None, channel_id=None):
         wav, sr = sf.read(path)
+        
         if channel_id is not None:
             assert wav.ndim == 2, \
                 f"Expected stereo input when channel_id is given ({path})"
@@ -42,7 +44,8 @@ class HubertFeatureReader:
         if wav.ndim == 2:
             wav = wav.mean(-1)
         assert wav.ndim == 1, wav.ndim
-        assert sr == self.task.cfg.sample_rate, sr
+        # if sr != self.task.cfg.sample_rate:
+        #     wav = librosa.resample(wav, orig_sr=sr, target_sr=self.task.cfg.sample_rate)
         if ref_len is not None and abs(ref_len - len(wav)) > 160:
             print(f"ref {ref_len} != read {len(wav)} ({path})")
         return wav
@@ -67,4 +70,7 @@ class HubertFeatureReader:
                     output_layer=self.layer,
                 )
                 feat.append(feat_chunk)
-        return torch.cat(feat, 1).squeeze(0)
+        if feat != []:
+            return torch.cat(feat, 1).squeeze(0)
+        else:
+            return None

@@ -42,6 +42,13 @@ class SpeechDLMCriterionConfig(FairseqDataclass):
             "(default: 1)"
         },
     )
+    ctc_loss_weight: float = field(
+        default=0,
+        metadata={
+            "help": "The weight of the CTC Loss"
+            "(default: 0)"
+        },
+    )
 
 
 @register_criterion("speech_dlm_criterion", dataclass=SpeechDLMCriterionConfig)
@@ -66,6 +73,7 @@ class SpeechDLMCriterion(FairseqCriterion):
         general_unit_loss_weight,
         edge_unit_loss_weight,
         duration_loss_weight,
+        ctc_loss_weight,
     ):
         super().__init__(task)
         self.sentence_avg = sentence_avg
@@ -100,6 +108,11 @@ class SpeechDLMCriterion(FairseqCriterion):
                 assert (
                     duration_loss_weight > 0
                 ), "Expect a positive --duration-loss-weight for duration prediction"
+            elif t == "ctc":
+                self.target_weights[t] = ctc_loss_weight
+                assert (
+                    ctc_loss_weight > 0
+                ), "Expect a positive --ctc-loss-weight for ctc training"
 
     def forward(self, model, sample, reduce=True):
         """Compute the loss for the given sample.
@@ -111,7 +124,7 @@ class SpeechDLMCriterion(FairseqCriterion):
         """
         net_output = model(**sample["net_input"])
         loss_dict, stats_dict = self.compute_loss(
-            model, net_output, sample, reduce=reduce
+            model, net_output, ctc_output, sample, reduce=reduce
         )
         nsentences = sample["net_input"]["src_tokens"][self.channels[0]].size(0)
 
@@ -189,10 +202,11 @@ class SpeechDLMCriterion(FairseqCriterion):
 
         return training_loss, sample_size_all, logging_output
 
-    def compute_loss(self, model, net_output, sample, reduce=True):
+    def compute_loss(self, model, net_output, ctc_output, sample, reduce=True):
         # Get the model outputs and target
         lprobs_dict = model.get_normalized_probs(net_output, log_probs=True)
-        target_dict = model.get_targets(sample, net_output)
+        ctcprobs_dict = model.get_normalized_probs(ctc_output, log_probs=True)
+        target_dict = model.get_targets(sample, None)
 
         # Init the dictionaries
         loss_dict, stats_dict = {}, {}
@@ -256,7 +270,10 @@ class SpeechDLMCriterion(FairseqCriterion):
                             reduction="sum" if reduce else "none",
                         )
                         preds = preds.round()
-
+                    elif t == "ctc":
+                        target = target_dict["ctc"][pred_channel]
+                        preds = 
+                        loss = F.CTCLoss(preds, target, preds_leng, target_leng, blank=0)
                     correct = (preds == target).sum().float().cpu().item()
                     count = float(target.size(0))
 

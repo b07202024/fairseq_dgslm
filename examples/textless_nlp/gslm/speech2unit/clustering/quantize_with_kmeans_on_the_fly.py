@@ -11,14 +11,46 @@ import numpy as np
 
 import joblib
 import sys
+import tqdm
 sys.path.append('/home/iven/fairseq')
-
 from examples.textless_nlp.gslm.speech2unit.clustering.utils import (
     get_audio_files,
 )
 from examples.textless_nlp.gslm.speech2unit.pretrained.utils import (
-    get_features,
+    get_feature_iterator,
 )
+
+def gen_kmeans(
+    feature_type, checkpoint_path, layer, manifest_path, sample_pct, flatten, channel_id, kmeans_model, args
+):
+    generator, num_files = get_feature_iterator(
+        feature_type=feature_type,
+        checkpoint_path=checkpoint_path,
+        layer=layer,
+        manifest_path=manifest_path,
+        sample_pct=sample_pct,
+        channel_id=channel_id
+    )
+    iterator = generator()
+
+    _, fnames, _ = get_audio_files(args.manifest_path)
+    os.makedirs(os.path.dirname(args.out_quantized_file_path), exist_ok=True)
+    print(f"Writing quantized predictions to {args.out_quantized_file_path}")
+    with open(args.out_quantized_file_path, "w") as fout:
+        try:
+            for i, feats in enumerate(tqdm.tqdm(iterator, total=num_files)):
+                pred = kmeans_model.predict(feats)
+                pred_str = " ".join(str(p) for p in pred)
+                base_fname = os.path.basename(fnames[i]).rstrip('.'+args.extension.lstrip('.'))
+                if args.channel_id is not None:
+                    base_fname = base_fname+f'-channel{args.channel_id}'
+                if not args.hide_fname:
+                    fout.write(f"{base_fname}|{pred_str}\n")
+                else:
+                    fout.write(f"{pred_str}\n")
+        except:
+            print(i)
+    del generator
 
 
 def get_logger():
@@ -92,13 +124,19 @@ def get_parser():
 
 
 def main(args, logger):
+    
+    # K-means model
+    logger.info(f"Loading K-means model from {args.kmeans_model_path} ...")
+    kmeans_model = joblib.load(open(args.kmeans_model_path, "rb"))
+    kmeans_model.verbose = False
+    
     # Feature extraction
     if args.features_path is not None:
         logger.info(f"Loading acoustic features from {args.features_path}...")
         features_batch = np.load(args.features_path)
     else:
         logger.info(f"Extracting {args.feature_type} acoustic features...")
-        features_batch = get_features(
+        gen_kmeans(
             feature_type=args.feature_type,
             checkpoint_path=args.acoustic_model_path,
             layer=args.layer,
@@ -106,34 +144,10 @@ def main(args, logger):
             sample_pct=1.0,
             flatten=False,
             channel_id=int(args.channel_id) if args.channel_id else None,
+            kmeans_model=kmeans_model,
+            args=args
         )
-        logger.info(
-            f"Features extracted for {len(features_batch)} utterances.\n"
-        )
-        logger.info(
-            f"Dimensionality of representation = {features_batch[0].shape[1]}"
-        )
-
-    # K-means model
-    logger.info(f"Loading K-means model from {args.kmeans_model_path} ...")
-    kmeans_model = joblib.load(open(args.kmeans_model_path, "rb"))
-    kmeans_model.verbose = False
-
-    _, fnames, _ = get_audio_files(args.manifest_path)
-
-    os.makedirs(os.path.dirname(args.out_quantized_file_path), exist_ok=True)
-    print(f"Writing quantized predictions to {args.out_quantized_file_path}")
-    with open(args.out_quantized_file_path, "w") as fout:
-        for i, feats in enumerate(features_batch):
-            pred = kmeans_model.predict(feats)
-            pred_str = " ".join(str(p) for p in pred)
-            base_fname = os.path.basename(fnames[i]).rstrip('.'+args.extension.lstrip('.'))
-            if args.channel_id is not None:
-                base_fname = base_fname+f'-channel{args.channel_id}'
-            if not args.hide_fname:
-                fout.write(f"{base_fname}|{pred_str}\n")
-            else:
-                fout.write(f"{pred_str}\n")
+    
 
 
 if __name__ == "__main__":

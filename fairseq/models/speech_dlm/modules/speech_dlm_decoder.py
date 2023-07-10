@@ -42,9 +42,11 @@ class CrossChannelTransformerDecoder(FairseqIncrementalDecoder):
             (default: False).
     """
 
-    def __init__(self, args, dictionary, embed_tokens, channels, no_encoder_attn=False):
+    def __init__(self, args, dictionary, embed_tokens, channels, no_encoder_attn=False, text_dictionary=None):
         self.args = args
         super().__init__(dictionary)
+        self.text_dictionary = text_dictionary
+
         self.register_buffer("version", torch.Tensor([3]))
         self._future_mask = torch.empty(0)
 
@@ -131,6 +133,10 @@ class CrossChannelTransformerDecoder(FairseqIncrementalDecoder):
             if embed_dim != self.output_embed_dim
             else None
         )
+
+        if args.ctc_prediction == "True":
+            text_embed_dim = len(self.text_dictionary)
+            self.ctc_project = nn.Linear(embed_dim, text_embed_dim, bias=False)
 
         self.output_projection = None
         self.is_cross_prediction = bool(
@@ -313,6 +319,7 @@ class CrossChannelTransformerDecoder(FairseqIncrementalDecoder):
             alignment_layer = self.num_layers - 1
 
         x_list = []
+        ctc_list = []
         for i, channel in enumerate(self.channels):
             # embed positions
             positions = None
@@ -423,14 +430,19 @@ class CrossChannelTransformerDecoder(FairseqIncrementalDecoder):
             # T x B x C -> B x T x C
             x = x.transpose(0, 1)
 
+            if hasattr(self, ctc_project):
+                ctc = self.ctc_project(x)
+
             if self.project_out_dim is not None:
                 x = self.project_out_dim(x)
-
+            
             x_list[i] = x
+            ctc_list[i] = ctc
 
         x = {channel: x_list[i] for i, channel in enumerate(self.channels)}
+        ctc = {channel: ctc_list[i] for i, channel in enumerate(self.channels)}
 
-        return x, {"attn": [attn], "inner_states": inner_states}
+        return x, {"ctc": ctc, "attn": [attn], "inner_states": inner_states}
 
     def output_layer(self, features):
         """Project features to the vocabulary size.
