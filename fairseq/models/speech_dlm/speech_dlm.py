@@ -230,7 +230,7 @@ class SpeechDLM(FairseqLanguageModel):
 
     @property
     def supported_targets(self):
-        return {"next", "edge", "duration"}
+        return {"next", "edge", "duration", "ctc"}
 
 
 def base_lm_architecture(args):

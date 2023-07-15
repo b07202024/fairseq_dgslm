@@ -155,7 +155,7 @@ class SpeechDLMTask(LegacyFairseqTask):
             for the output of each channel of the SpeechDLM model. In most cases it
             will be the same as *dictionaries*.
         targets (List[str]): list of the target types that the SpeechDLM model
-            should predict.  Can be one of "next", "edge", "duration".
+            should predict.  Can be one of "next", "edge", "duration", "ctc".
             Defaults to "next".
 
     .. note::
@@ -295,7 +295,7 @@ class SpeechDLMTask(LegacyFairseqTask):
         if str(getattr(args, "duration_prediction", "false")).lower() == "true":
             targets.append("duration")
         if str(getattr(args, "ctc_prediction", "false")).lower() == "true":
-            targets.append("duration")
+            targets.append("ctc")
         if len(targets) == 0:
             # standard language modeling
             targets = ["next"]
@@ -322,23 +322,41 @@ class SpeechDLMTask(LegacyFairseqTask):
 
         data_path = paths[(epoch - 1) % len(paths)]
 
-        channel_datasets = {}
+        channel_unit_datasets = {}
+        channel_text_datasets = {}
         for channel in self.channels:
-            split_path = os.path.join(data_path, split + "." + channel)
-            dictionary = self.dicts[channel]
-            output_dictionary = self.output_dicts[channel]
-
-            dataset = data_utils.load_indexed_dataset(
-                split_path, dictionary, self.args.dataset_impl, combine=combine
+            unit_path = os.path.join(data_path, split + "." + channel)
+            text_path = os.path.join(data_path, split + "." + channel.replace("unit", "text"))
+            in_dict = self.dicts[channel]
+            text_dict = self.ctc_dicts[channel]
+            
+            out_dict = self.output_dicts[channel]
+            unit_dataset = data_utils.load_indexed_dataset(
+                unit_path, in_dict, self.args.dataset_impl, combine=combine
+            )
+            text_dataset = data_utils.load_indexed_dataset(
+                text_path, text_dict, self.args.dataset_impl, combine=combine
             )
 
-            if dataset is None:
+            if unit_dataset is None:
                 raise FileNotFoundError(
-                    "[{}] Dataset not found: {} ({})".format(channel, split, split_path)
+                    "[{}] Unit Dataset not found: {} ({})".format(channel, split, unit_path)
                 )
-
-            dataset = maybe_shorten_dataset(
-                dataset,
+            if text_dataset is None and self.ctc_prediction:
+                raise FileNotFoundError(
+                    "[{}] Text Dataset not found: {} ({})".format(channel, split, text_path)
+                )
+            
+            unit_dataset = maybe_shorten_dataset(
+                unit_dataset,
+                split,
+                self.args.shorten_data_split_list,
+                self.args.shorten_method,
+                self.args.tokens_per_sample,
+                self.args.seed,
+            )
+            text_dataset = maybe_shorten_dataset(
+                text_dataset,
                 split,
                 self.args.shorten_data_split_list,
                 self.args.shorten_method,
@@ -346,12 +364,12 @@ class SpeechDLMTask(LegacyFairseqTask):
                 self.args.seed,
             )
 
-            dataset = TokenBlockDataset(
-                dataset,
-                dataset.sizes,
+            unit_dataset = TokenBlockDataset(
+                unit_dataset,
+                unit_dataset.sizes,
                 self.args.tokens_per_sample,
-                pad=dictionary.pad(),
-                eos=dictionary.eos(),
+                pad=in_dict.pad(),
+                eos=in_dict.eos(),
                 break_mode=self.args.sample_break_mode,
                 include_targets=True,
             )
@@ -361,19 +379,22 @@ class SpeechDLMTask(LegacyFairseqTask):
                 and self.args.sample_break_mode != "none"
             )
 
-            channel_datasets[channel] = MonolingualDataset(
-                dataset=dataset,
-                sizes=dataset.sizes,
-                src_vocab=dictionary,
-                tgt_vocab=output_dictionary,
+            channel_unit_datasets[channel] = MonolingualDataset(
+                dataset=unit_dataset,
+                sizes=unit_dataset.sizes,
+                src_vocab=in_dict,
+                tgt_vocab=out_dict,
                 add_eos_for_other_targets=add_eos_for_other_targets,
                 shuffle=False,
                 targets=["future"],
                 add_bos_token=self.args.add_bos_token,
             )
 
+            channel_text_datasets[channel] = text_dataset
+
         self.datasets[split] = SpeechDLMDataset(
-            datasets=channel_datasets,
+            unit_datasets=channel_unit_datasets,
+            text_datasets=channel_text_datasets,
             targets=self.targets,
             max_target_durations=self.max_target_durations,
             shuffle=True,

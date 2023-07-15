@@ -12,6 +12,7 @@ import numpy as np
 import joblib
 import sys
 import tqdm
+import re
 sys.path.append('/home/iven/fairseq')
 from examples.textless_nlp.gslm.speech2unit.clustering.utils import (
     get_audio_files,
@@ -33,23 +34,37 @@ def gen_kmeans(
     )
     iterator = generator()
 
-    _, fnames, _ = get_audio_files(args.manifest_path)
+    root, fnames, _ = get_audio_files(args.manifest_path)
     os.makedirs(os.path.dirname(args.out_quantized_file_path), exist_ok=True)
     print(f"Writing quantized predictions to {args.out_quantized_file_path}")
-    with open(args.out_quantized_file_path, "w") as fout:
-        try:
-            for i, feats in enumerate(tqdm.tqdm(iterator, total=num_files)):
-                pred = kmeans_model.predict(feats)
-                pred_str = " ".join(str(p) for p in pred)
-                base_fname = os.path.basename(fnames[i]).rstrip('.'+args.extension.lstrip('.'))
-                if args.channel_id is not None:
-                    base_fname = base_fname+f'-channel{args.channel_id}'
-                if not args.hide_fname:
-                    fout.write(f"{base_fname}|{pred_str}\n")
-                else:
-                    fout.write(f"{pred_str}\n")
-        except:
-            print(i)
+    channel_name = 'A' if channel_id == 1 else 'B'
+    unit_path = args.out_quantized_file_path + '.unit' + channel_name
+    text_path = args.out_quantized_file_path + '.text' + channel_name
+    with open(unit_path, "w") as unit, open(text_path, "w") as text:
+        # try:
+        for i, feats in enumerate(tqdm.tqdm(iterator, total=num_files)):
+            pred = kmeans_model.predict(feats)
+            pred_str = " ".join(str(p) for p in pred)
+            trans_path = root + '/' + fnames[i].replace('wav', channel_name)
+            with open(trans_path) as tf:
+                trans = tf.readline().strip()
+                trans = trans.strip().upper()
+                trans = re.sub('\\(\\(.*?\\)\\)|\\[.*?\\] ', '', trans)
+                while "  " in trans:
+                    trans = trans.replace("  ", " ")
+                trans = trans.replace(" ", "|") + "|"
+                trans = ' '.join(trans)
+            base_fname = os.path.basename(fnames[i]).rstrip('.'+args.extension.lstrip('.'))
+            if args.channel_id is not None:
+                base_fname = base_fname+f'-channel{args.channel_id}'
+            if not args.hide_fname:
+                unit.write(f"{base_fname}|{pred_str}\n")
+                text.write(f"{base_fname}|{trans}\n")
+            else:
+                unit.write(f"{pred_str}\n")
+                text.write(f"{trans}\n")
+        # except:
+        #     print(i)
     del generator
 
 

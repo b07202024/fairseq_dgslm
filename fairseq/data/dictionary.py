@@ -238,7 +238,8 @@ class Dictionary:
                 with open(PathManager.get_local_path(f), "r", encoding="utf-8") as fd:
                     self.add_from_file(fd)
             except FileNotFoundError as fnfe:
-                raise fnfe
+                with open(PathManager.get_local_path('/home/iven/fairseq/examples/textless_nlp/data/dict.unitA.txt'), "r", encoding="utf-8") as fd:
+                    self.add_from_file(fd)
             except UnicodeError:
                 raise Exception(
                     "Incorrect encoding detected in {}, please "

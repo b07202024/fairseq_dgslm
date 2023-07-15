@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from fairseq.data import FairseqDataset, MonolingualDataset, data_utils
+from fairseq.data.shorten_dataset import TruncateDataset, RandomCropDataset
 
 
 class SpeechDLMDataset(FairseqDataset):
@@ -48,36 +49,40 @@ class SpeechDLMDataset(FairseqDataset):
     """
 
     def __init__(
-        self, datasets, targets=None, max_target_durations=None, shuffle=False
+        self, unit_datasets, text_datasets, targets=None, max_target_durations=None, shuffle=False
     ):
         super().__init__()
-        if isinstance(datasets, dict):
-            datasets = OrderedDict(datasets)
+        if isinstance(unit_datasets, dict):
+            unit_datasets = OrderedDict(unit_datasets)
         assert isinstance(
-            datasets, OrderedDict
-        ), "datasets is expected to be an instance of Dictionary or OrderedDict"
-        assert datasets, "datasets is None"
-        for dataset in datasets.values():
+            unit_datasets, OrderedDict
+        ), "unit_datasets is expected to be an instance of Dictionary or OrderedDict"
+        assert unit_datasets, "unit_datasets is None"
+        if isinstance(text_datasets, dict):
+            text_datasets = OrderedDict(text_datasets)
+        
+        for dataset in unit_datasets.values():
             assert isinstance(
                 dataset, MonolingualDataset
-            ), "Each value of datasets is expected to be an instance of MonolingualDataset"
+            ), "Each value of unit_datasets is expected to be an instance of MonolingualDataset"
 
-        self.datasets = datasets
+        self.unit_datasets = unit_datasets
+        self.text_datasets = text_datasets
         self.targets = targets
         if max_target_durations is not None and max_target_durations > 0:
             self.max_target_durations = max_target_durations
         else:
             self.max_target_durations = float("inf")
-        self.sizes = next(iter(datasets.values())).sizes
-        self.vocab = next(iter(datasets.values())).vocab
-        self.length = len(next(iter(datasets.values())))
+        self.sizes = next(iter(unit_datasets.values())).sizes
+        self.vocab = next(iter(unit_datasets.values())).vocab
+        self.length = len(next(iter(unit_datasets.values())))
         self.shuffle = shuffle
 
-        for channel, dataset in datasets.items():
+        for channel, dataset in unit_datasets.items():
             assert (
-                len(dataset) == self.length
-            ), "[{}] length mismatch ({} vs {})".format(
-                channel, len(dataset), self.length
+                len(dataset) == len(self.text_datasets[channel]) == self.length
+            ), "[{}] length mismatch ({} vs {} vs {})".format(
+                channel, len(dataset), len(self.text_datasets[channel]), self.length
             )
             assert (dataset.sizes == self.sizes).all(), "[{}] sizes mismatch".format(
                 channel
@@ -100,13 +105,20 @@ class SpeechDLMDataset(FairseqDataset):
         source = OrderedDict(
             [
                 (key, dataset[index]["source"])
-                for (key, dataset) in self.datasets.items()
+                for (key, dataset) in self.unit_datasets.items()
+            ]
+        )
+        text = OrderedDict(
+            [
+                (key, dataset[index])
+                for (key, dataset) in self.text_datasets.items()
             ]
         )
 
         item = {
             "id": index,
             "source": source,
+            "target_ctc": text,
             "target_next": None,
             "target_edge": None,
             "target_duration": None,
@@ -114,7 +126,7 @@ class SpeechDLMDataset(FairseqDataset):
         }
 
         if self.targets is not None:
-            for channel in self.datasets:
+            for channel in self.unit_datasets:
                 target = self._get_target(index, channel)
                 for t in target:
                     if item[f"target_{t}"] is None:
@@ -136,7 +148,7 @@ class SpeechDLMDataset(FairseqDataset):
             target = {}
             pad_idx = self.vocab.pad()
             max_dur = self.max_target_durations
-            future_target = self.datasets[channel][index]["target"]
+            future_target = self.unit_datasets[channel][index]["target"]
             if "edge" in self.targets or "duration" in self.targets:
                 edge_units, edge_unit_counts = torch.unique_consecutive(
                     future_target, return_counts=True
@@ -156,9 +168,9 @@ class SpeechDLMDataset(FairseqDataset):
                     target[t] = edge_units
                 elif t == "duration":
                     # count the remaining duration of the last edge indices in the next sentence
-                    if not padding_end and index < len(self.datasets[channel]) - 1:
+                    if not padding_end and index < len(self.unit_datasets[channel]) - 1:
                         i = 0
-                        next_sentence_target = self.datasets[channel][index + 1][
+                        next_sentence_target = self.unit_datasets[channel][index + 1][
                             "target"
                         ]
                         while (
@@ -173,6 +185,8 @@ class SpeechDLMDataset(FairseqDataset):
                         edge_unit_counts[edge_unit_counts > max_dur] = max_dur
 
                     target[t] = edge_unit_counts
+                elif t == "ctc":
+                    target[t] = self.text_datasets[channel][index]
                 else:
                     raise Exception("invalid target " + t)
 
@@ -222,16 +236,16 @@ class SpeechDLMDataset(FairseqDataset):
         """
         if len(samples) == 0:
             return {}
-
         pad_idx = self.vocab.pad()
         eos_idx = self.vocab.eos()
 
         def merge(key, max_size=None):
-            if samples[0][key] is None:
+            mapped_key = "target_ctc" if key == "target_ctc_length" else key
+            if samples[0][mapped_key] is None:
                 return None
             res = OrderedDict()
-            for channel in samples[0][key]:
-                if key in ["source", "target_next"]:
+            for channel in samples[0][mapped_key]:
+                if key in ["source", "target_next", "target_ctc"]:
                     # fill batch of shape: (batch_size, max_size)
                     res[channel] = data_utils.collate_tokens(
                         [s[key][channel] for s in samples],
@@ -247,10 +261,14 @@ class SpeechDLMDataset(FairseqDataset):
                     res[channel] = torch.cat(
                         [s[key][channel] + i * max_size for i, s in enumerate(samples)]
                     )
+                elif key in "target_ctc_length":
+                    res[channel] = torch.LongTensor([s["target_ctc"][channel].numel() for s in samples])
 
             return res
 
         src_tokens = merge("source")
+        ctc = merge("target_ctc")
+        ctc_lengths = merge("target_ctc_length")
         tgt_next = merge("target_next")
         tgt_edge = merge("target_edge")
         tgt_duration = merge("target_duration")
@@ -268,6 +286,10 @@ class SpeechDLMDataset(FairseqDataset):
                 ),
             },
             "target": {
+                "ctc": {
+                    "ctc_tokens": ctc,
+                    "ctc_lengths": ctc_lengths
+                },
                 "next": tgt_next,
                 "edge": tgt_edge,
                 "duration": tgt_duration,

@@ -68,6 +68,7 @@ class CrossChannelTransformerDecoder(FairseqIncrementalDecoder):
         self.embed_tokens = embed_tokens
 
         self.embed_scale = 1.0 if args.no_scale_embedding else math.sqrt(embed_dim)
+        self.ctc = False if args.ctc_prediction == "False" else True
 
         if args.quant_noise_pq > 0:
             self.quant_noise = apply_quant_noise_(
@@ -134,10 +135,6 @@ class CrossChannelTransformerDecoder(FairseqIncrementalDecoder):
             else None
         )
 
-        if args.ctc_prediction == "True":
-            text_embed_dim = len(self.text_dictionary)
-            self.ctc_project = nn.Linear(embed_dim, text_embed_dim, bias=False)
-
         self.output_projection = None
         self.is_cross_prediction = bool(
             float(args.main_and_cross_weights.split(",")[1]) != 0
@@ -180,6 +177,19 @@ class CrossChannelTransformerDecoder(FairseqIncrementalDecoder):
             for i in range(self.n_output_projections):
                 nn.init.normal_(
                     self.output_projection[i].weight,
+                    mean=0,
+                    std=self.output_embed_dim**-0.5,
+                )
+        if  self.ctc:
+            self.ctc_projection = nn.ModuleList(
+                [
+                    nn.Linear(embed_dim, len(self.text_dictionary), bias=False)
+                    for _ in range(self.n_output_projections)
+                ]
+            )
+            for i in range(self.n_output_projections):
+                nn.init.normal_(
+                    self.ctc_projection[i].weight,
                     mean=0,
                     std=self.output_embed_dim**-0.5,
                 )
@@ -319,7 +329,7 @@ class CrossChannelTransformerDecoder(FairseqIncrementalDecoder):
             alignment_layer = self.num_layers - 1
 
         x_list = []
-        ctc_list = []
+
         for i, channel in enumerate(self.channels):
             # embed positions
             positions = None
@@ -430,19 +440,14 @@ class CrossChannelTransformerDecoder(FairseqIncrementalDecoder):
             # T x B x C -> B x T x C
             x = x.transpose(0, 1)
 
-            if hasattr(self, ctc_project):
-                ctc = self.ctc_project(x)
-
             if self.project_out_dim is not None:
                 x = self.project_out_dim(x)
             
             x_list[i] = x
-            ctc_list[i] = ctc
 
         x = {channel: x_list[i] for i, channel in enumerate(self.channels)}
-        ctc = {channel: ctc_list[i] for i, channel in enumerate(self.channels)}
 
-        return x, {"ctc": ctc, "attn": [attn], "inner_states": inner_states}
+        return x, {"attn": [attn], "inner_states": inner_states}
 
     def output_layer(self, features):
         """Project features to the vocabulary size.
@@ -489,6 +494,9 @@ class CrossChannelTransformerDecoder(FairseqIncrementalDecoder):
                             "pred_duration": self.output_duration_prediction[j - i](
                                 features[channel]
                             ),
+                            "ctc": self.ctc_projection[j - 1](
+                                features[channel]
+                            ) if self.ctc else None
                         }
                         for j, pred_channel in enumerate(self.channels)
                     }
@@ -502,6 +510,7 @@ class CrossChannelTransformerDecoder(FairseqIncrementalDecoder):
                             "pred_duration": self.output_duration_prediction[0](
                                 features[channel]
                             ),
+                            "ctc": self.ctc_projection[0](features[channel]) if self.ctc else None,
                         }
                     }
                     for i, channel in enumerate(self.channels)
@@ -542,22 +551,30 @@ class CrossChannelTransformerDecoder(FairseqIncrementalDecoder):
             for pred_channel in logits_dict[channel]:
                 if isinstance(logits_dict[channel][pred_channel], dict):
                     pred_token_logits = logits_dict[channel][pred_channel]["pred_token"]
+                    ctc_token_logits = logits_dict[channel][pred_channel]["ctc"]
                 else:
                     pred_token_logits = logits_dict[channel][pred_channel]
                 if log_probs:
                     out = utils.log_softmax(
                         pred_token_logits, dim=-1, onnx_trace=self.onnx_trace
-                    )
+                    )                    
+                    ctc_out = utils.log_softmax(
+                        ctc_token_logits, dim=-1, onnx_trace=self.onnx_trace
+                    ) if ctc_token_logits is not None else None
                 else:
                     out = utils.softmax(
                         pred_token_logits, dim=-1, onnx_trace=self.onnx_trace
                     )
+                    ctc_out = utils.softmax(
+                        ctc_token_logits, dim=-1, onnx_trace=self.onnx_trace
+                    ) if ctc_token_logits is not None else None
                 if isinstance(logits_dict[channel][pred_channel], dict):
                     out_dict[channel][pred_channel] = {
                         "pred_token": out,
                         "pred_duration": logits_dict[channel][pred_channel][
                             "pred_duration"
                         ].float(),
+                        "ctc": ctc_out,
                     }  # move to float32 to avoid inf loss
                 else:
                     out_dict[channel][pred_channel] = out
