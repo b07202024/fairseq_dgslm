@@ -77,7 +77,7 @@ python examples/textless_nlp/dgslm/vocoder_hifigan/create_input_code.py \
 
 ### Training a SpeechDLM model
 #### 1) Data preparation
-First, you need to prepare the raw dataset. For each `split` (train, valid), you need two files corresponding to two channels (namely `unitA` and `unitB` for example) containing the units from each channel separately. Make sure that 2 files have the same number of lines and each corresponding line has the same number of units.
+First, you need to prepare the raw dataset. For each `split` (train, valid), you need four files corresponding to two channels in unit and text (namely `unitA`, `unitB`, `textA`, `textB` for example) containing the units from each channel separately. Make sure that 2 files have the same number of lines and each corresponding line has the same number of units.
 
 Here is an example of `.unitA` file :
 ```
@@ -91,7 +91,7 @@ and the corresponding `.unitB` file :
 7 7 136
 331 445
 ```
-These two files can be obtained using the [example command](hubert_fisher/#encode-audio-to-discrete-units) of hubert fisher, with the `--hide-fname` option added.
+These two files can be obtained using the [unit_generate.sh](unit_generate.sh) of hubert fisher, with the `--hide-fname` option added.
 
 The raw dataset directory should contain the following files :
 ```
@@ -99,64 +99,19 @@ train.unitA valid.unitA
 train.unitB valid.unitB
 ```
 
-Next preprocess/binarize the data with `fairseq-preprocess`, but make sure to preprocess each channel separately, and **rename** the preprocessed files under the following format `${split}.${channel}.{bin, idx}`. Each channel also needs a separate dictionary file under the name `dict.${channel}.txt` .
+Next preprocess/binarize the data with [preprocess.sh](preprocess.sh), but make sure to preprocess each channel separately, and **rename** the preprocessed files under the following format `${split}.${channel}.{bin, idx}`. Each channel also needs a separate dictionary file under the name `dict.${channel}.txt` .
 
-Here is an example pre-processing code :
 
-```bash
-# Preprocess the first channel (unitA)
-fairseq-preprocess --source-lang unitA \
-    --only-source \
-    --trainpref $RAW_DATA_DIR/train \
-    --validpref $RAW_DATA_DIR/valid \
-    --destdir $BIN_DATA_DIR \
-    --workers 20
-
-# Preprocess the second channel (unitB) and reuse the dictionary from the first channel
-fairseq-preprocess --source-lang unitB \
-    --srcdict $BIN_DATA_DIR/dict.unitA.txt \
-    --only-source \
-    --trainpref $RAW_DATA_DIR/train \
-    --validpref $RAW_DATA_DIR/valid \
-    --destdir $BIN_DATA_DIR \
-    --workers 20
-
-# Rename the bin & index files
-for channel in unitA unitB; do
-  for split in train valid; do
-    mv $BIN_DATA_DIR/${split}.${channel}-None.${channel}.bin $BIN_DATA_DIR/${split}.${channel}.bin
-    mv $BIN_DATA_DIR/${split}.${channel}-None.${channel}.idx $BIN_DATA_DIR/${split}.${channel}.idx
-  done
-done
-```
 Finally, the preprocessed (bin) dataset directory should contain the following files :
 ```
 dict.unitA.txt  train.unitA.idx train.unitA.bin valid.unitA.idx valid.unitA.bin
 dict.unitB.txt  train.unitB.idx train.unitB.bin valid.unitB.idx valid.unitB.bin
+dict.textA.txt  train.textA.idx train.textA.bin valid.textA.idx valid.textA.bin
+dict.textB.txt  train.textB.idx train.textB.bin valid.textB.idx valid.textB.bin
 ```
 
 #### 2) Train the model
-To train the SpeechDLM (with the configuration as the pre-trained model) on 2 GPUs :
-```bash
-fairseq-train $BIN_DATA_DIR \
-    --save-dir $CHECKPOINT_DIR \
-    --tensorboard-logdir $CHECKPOINT_DIR \
-    --task speech_dlm_task --channels unitA,unitB \
-    --next-unit-prediction "False" --edge-unit-prediction "True" \
-    --duration-prediction "True" --delayed-duration-target "True" \
-    --criterion speech_dlm_criterion \
-    --arch speech_dlm --decoder-cross-layers 4 \
-    --share-decoder-input-output-embed \
-    --dropout 0.1 --attention-dropout 0.1 \
-    --optimizer adam --adam-betas "(0.9, 0.98)" --clip-norm 1.0 \
-    --lr 0.0005 --lr-scheduler inverse_sqrt --warmup-init-lr 1e-07 \
-    --max-tokens 18432 --tokens-per-sample 6144 --sample-break-mode none \
-    --update-freq 16 --num-workers 4 --skip-invalid-size-inputs-valid-test \
-    --max-update 250000 --warmup-updates 20000 \
-    --save-interval-updates 10000 --keep-last-epochs 1 --no-epoch-checkpoints \
-    --log-interval 50 --seed 100501 \
-    --fp16 --checkpoint-activations
-```
+To train the SpeechDLM (with the configuration as the pre-trained model) [dgslm.sh](dgslm.sh) :
 
 #### 3) Validate
 The model can be validated via the `fairseq-validate` command :
