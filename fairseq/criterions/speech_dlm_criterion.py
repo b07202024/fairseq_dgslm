@@ -125,9 +125,10 @@ class SpeechDLMCriterion(FairseqCriterion):
         2) the sample size, which is used as the denominator for the gradient
         3) logging outputs to display while training
         """
-        net_output = model(**sample["net_input"])
+        tok_output = model(**sample["net_input"], full_context_alignment=True)
+        ctc_output = model(**sample["net_input"], full_context_alignment=False) if "ctc" in self.targets else None
         loss_dict, stats_dict = self.compute_loss(
-            model, net_output, sample, reduce=reduce
+            model, tok_output, ctc_output, sample, reduce=reduce
         )
         nsentences = sample["net_input"]["src_tokens"][self.channels[0]].size(0)
 
@@ -230,9 +231,10 @@ class SpeechDLMCriterion(FairseqCriterion):
 
         return training_loss, sample_size_all, logging_output
 
-    def compute_loss(self, model, net_output, sample, reduce=True):
+    def compute_loss(self, model, tok_output, ctc_output, sample, reduce=True):
         # Get the model outputs and target
-        lprobs_dict = model.get_normalized_probs(net_output, log_probs=True)
+        tok_lprobs_dict = model.get_normalized_probs(tok_output, log_probs=True)
+        ctc_lprobs_dict = model.get_normalized_probs(ctc_output, log_probs=True)
         target_dict = model.get_targets(sample, None)
 
         # Init the dictionaries
