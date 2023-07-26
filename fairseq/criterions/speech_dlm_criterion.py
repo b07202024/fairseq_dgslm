@@ -125,8 +125,8 @@ class SpeechDLMCriterion(FairseqCriterion):
         2) the sample size, which is used as the denominator for the gradient
         3) logging outputs to display while training
         """
-        tok_output = model(**sample["net_input"], full_context_alignment=True)
-        ctc_output = model(**sample["net_input"], full_context_alignment=False) if "ctc" in self.targets else None
+        tok_output = model(**sample["net_input"], full_context_alignment=False)
+        ctc_output = model(**sample["net_input"], full_context_alignment=True) if "ctc" in self.targets else None
         loss_dict, stats_dict = self.compute_loss(
             model, tok_output, ctc_output, sample, reduce=reduce
         )
@@ -169,13 +169,14 @@ class SpeechDLMCriterion(FairseqCriterion):
                     if t != "ctc":
                         correct, count = stats_dict[channel][pred_channel][t]
                     else:
-                        correct, count, dist = stats_dict[channel][pred_channel][t]
+                        count, dist = stats_dict[channel][pred_channel][t]
 
                     # Log the statistics
                     logging_output["{}{}_loss".format(prefix, log_key)] = loss.data
-                    logging_output["{}{}_correct".format(prefix, log_key)] = correct
                     logging_output["{}{}_count".format(prefix, log_key)] = count
-                    if t == "ctc":
+                    if t != "ctc":
+                        logging_output["{}{}_correct".format(prefix, log_key)] = correct
+                    else:
                         logging_output["{}{}_w_errors".format(prefix, log_key)] = dist["w_errors"]
                         logging_output["{}{}_w_total".format(prefix, log_key)] = dist["w_total"]
                         logging_output["{}{}_c_errors".format(prefix, log_key)] = dist["c_errors"]
@@ -234,7 +235,7 @@ class SpeechDLMCriterion(FairseqCriterion):
     def compute_loss(self, model, tok_output, ctc_output, sample, reduce=True):
         # Get the model outputs and target
         tok_lprobs_dict = model.get_normalized_probs(tok_output, log_probs=True)
-        ctc_lprobs_dict = model.get_normalized_probs(ctc_output, log_probs=True) if ctc_output else None
+        ctc_lprobs_dict = model.get_normalized_probs(ctc_output, log_probs=True) if ctc_output is not None else None
         target_dict = model.get_targets(sample, None)
 
         # Init the dictionaries
@@ -252,7 +253,7 @@ class SpeechDLMCriterion(FairseqCriterion):
                 # Get token & duration predictions
                 tok_outs = tok_lprobs_dict[channel][pred_channel]
                 ctc_lprobs = ctc_lprobs_dict[channel][pred_channel] if ctc_lprobs_dict else None
-                if not isinstance(outputs, dict):
+                if not isinstance(tok_outs, dict):
                     token_lprobs = tok_outs
                 else:
                     token_lprobs = tok_outs["pred_token"]
@@ -261,7 +262,7 @@ class SpeechDLMCriterion(FairseqCriterion):
                 token_lprobs = token_lprobs.view(-1, token_lprobs.size(-1))
                 token_preds = token_lprobs.argmax(dim=-1)
 
-                if ctc_lprobs:
+                if ctc_lprobs is not None:
                     ctc_lprobs = ctc_lprobs.transpose(0, 1)
                     ctc_preds = ctc_lprobs.transpose(0, 1).argmax(dim=-1)
 
@@ -323,7 +324,9 @@ class SpeechDLMCriterion(FairseqCriterion):
                             target,
                             input_lengths,
                             target_lengths,
-                            blank=self.text_dictionary.pad()
+                            blank=self.text_dictionary.pad(),
+                            reduction="sum" if reduce else "none",
+                            zero_infinity=True,
                         )
                     if t != "ctc":
                         correct = (preds == target).sum().float().cpu().item()
@@ -362,7 +365,7 @@ class SpeechDLMCriterion(FairseqCriterion):
                         stats_dict[channel][pred_channel][t] = (correct, count)
                     else:
                         count = float(torch.sum(target.view(-1) != self.text_dictionary.pad()))
-                        stats_dict[channel][pred_channel][t] = (0, count, 
+                        stats_dict[channel][pred_channel][t] = (count, 
                             {
                                 "c_errors": c_err,
                                 "c_total": c_len,
