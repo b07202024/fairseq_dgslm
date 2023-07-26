@@ -261,7 +261,7 @@ class SpeechDLMCriterion(FairseqCriterion):
 
                 if "ctc" in self.targets:
                     ctc_lprobs = ctc_lprobs.transpose(0, 1)
-                    ctc_preds = ctc_lprobs.argmax(dim=-1)
+                    ctc_preds = ctc_lprobs.transpose(0, 1).argmax(dim=-1)
 
                 # Get edge indices
                 if "edge" in self.targets or "duration" in self.targets:
@@ -354,12 +354,12 @@ class SpeechDLMCriterion(FairseqCriterion):
                                     w_err += editdistance.eval(pred_words, targ_words)
                                     w_len += len(targ_words)
 
-                    count = float(target.size(0))
-
                     loss_dict[channel][pred_channel][t] = loss
                     if t != 'ctc':
+                        count = float(target.size(0))
                         stats_dict[channel][pred_channel][t] = (correct, count)
                     else:
+                        count = float(torch.sum(target.view(-1) != self.text_dictionary.pad()))
                         stats_dict[channel][pred_channel][t] = (0, count, 
                             {
                                 "c_errors": c_err,
