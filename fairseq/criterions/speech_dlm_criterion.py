@@ -234,34 +234,34 @@ class SpeechDLMCriterion(FairseqCriterion):
     def compute_loss(self, model, tok_output, ctc_output, sample, reduce=True):
         # Get the model outputs and target
         tok_lprobs_dict = model.get_normalized_probs(tok_output, log_probs=True)
-        ctc_lprobs_dict = model.get_normalized_probs(ctc_output, log_probs=True)
+        ctc_lprobs_dict = model.get_normalized_probs(ctc_output, log_probs=True) if ctc_output else None
         target_dict = model.get_targets(sample, None)
 
         # Init the dictionaries
         loss_dict, stats_dict = {}, {}
 
-        for channel in lprobs_dict:
+        for channel in tok_lprobs_dict:
             # Init the dictionaries
             loss_dict[channel], stats_dict[channel] = {}, {}
 
-            for pred_channel in lprobs_dict[channel]:
+            for pred_channel in tok_lprobs_dict[channel]:
                 # Init the dictionaries
                 loss_dict[channel][pred_channel] = {}
                 stats_dict[channel][pred_channel] = {}
 
                 # Get token & duration predictions
-                outputs = lprobs_dict[channel][pred_channel]
+                tok_outs = tok_lprobs_dict[channel][pred_channel]
+                ctc_lprobs = ctc_lprobs_dict[channel][pred_channel] if ctc_lprobs_dict else None
                 if not isinstance(outputs, dict):
-                    token_lprobs = outputs
+                    token_lprobs = tok_outs
                 else:
-                    token_lprobs = outputs["pred_token"]
-                    ctc_lprobs = outputs["ctc"]
-                    dur_preds = outputs["pred_duration"]
+                    token_lprobs = tok_outs["pred_token"]
+                    dur_preds = tok_outs["pred_duration"]
                     dur_preds = dur_preds.view(-1)
                 token_lprobs = token_lprobs.view(-1, token_lprobs.size(-1))
                 token_preds = token_lprobs.argmax(dim=-1)
 
-                if "ctc" in self.targets:
+                if ctc_lprobs:
                     ctc_lprobs = ctc_lprobs.transpose(0, 1)
                     ctc_preds = ctc_lprobs.transpose(0, 1).argmax(dim=-1)
 
