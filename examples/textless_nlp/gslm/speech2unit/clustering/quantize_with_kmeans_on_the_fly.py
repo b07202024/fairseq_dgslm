@@ -13,7 +13,7 @@ import joblib
 import sys
 import tqdm
 import re
-sys.path.append('/home/iven/fairseq')
+sys.path.append('/home/yukuanfu88/iven/fairseq_dgslm')
 from examples.textless_nlp.gslm.speech2unit.clustering.utils import (
     get_audio_files,
 )
@@ -40,31 +40,62 @@ def gen_kmeans(
     channel_name = 'A' if channel_id == 1 else 'B'
     unit_path = args.out_quantized_file_path + '.unit' + channel_name
     text_path = args.out_quantized_file_path + '.text' + channel_name
-    with open(unit_path, "w") as unit, open(text_path, "w") as text:
-        # try:
+    time_path = args.out_quantized_file_path + '.time' + channel_name
+    with open(unit_path, "w") as unit, open(text_path, "w") as text, open(time_path, "w") as time:    
         for i, feats in enumerate(tqdm.tqdm(iterator, total=num_files)):
             pred = kmeans_model.predict(feats)
             pred_str = " ".join(str(p) for p in pred)
-            trans_path = root + '/' + fnames[i].replace('wav', channel_name)
-            with open(trans_path) as tf:
-                trans = tf.readline().strip()
-                trans = trans.strip().upper()
-                trans = re.sub('\\(\\(.*?\\)\\)|\\[.*?\\] ', '', trans)
-                while "  " in trans:
-                    trans = trans.replace("  ", " ")
-                trans = trans.replace(" ", "|") + "|"
-                trans = ' '.join(trans)
+            trans_path = root + '/' + fnames[i].replace('flac', channel_name)
+            # trans_path = root + '/' + '-'.join(fnames[i].split('-')[:2]) + ".trans.txt"
             base_fname = os.path.basename(fnames[i]).rstrip('.'+args.extension.lstrip('.'))
+            with open(trans_path) as tf:
+                conts = tf.readlines()
+                all_trans = []
+                all_dur = []
+                for cont in conts:
+                    dur, trans = cont.split('\t', 1)
+                    start, end = dur.split(':')
+                    start = int(float(start) * 16000 / 320)
+                    end = int(float(end) * 16000 / 320)
+                    if end > 6100:
+                        break
+                    if end > len(pred):
+                        end = len(pred)
+                    if end <= start:
+                        if cont != conts[-1]:
+                            print(base_fname)
+                        break
+                    trans = trans.strip().upper()
+                    trans = re.sub('\\(\\(.*?\\)\\)|\\[.*?\\] ', '', trans)
+                    while "  " in trans:
+                        trans = trans.replace("  ", " ")
+                    trans = trans.replace(" ", "|")
+                    if trans != '':
+                        all_trans.append(' '.join(trans))
+                        all_dur.append(f'{start}:{end}')
+                all_trans = ' <SEP> '.join(all_trans) if all_trans != [] else '|'
+                all_dur = ' '.join(all_dur) if all_dur != [] else '0:1'
+            # with open(trans_path) as tf:
+            #     for line in tf.readlines():
+            #         line = line.strip()
+            #         name = line.split(' ')[0]
+            #         if name == fnames[i].split('/')[-1].replace('.flac', ''):
+            #             trans = line.split(' ', 1)[1]
+            #             trans = trans.replace(" ", "|") + "|"
+            #             trans = ' '.join(trans)
+            #             break
+            
             if args.channel_id is not None:
                 base_fname = base_fname+f'-channel{args.channel_id}'
             if not args.hide_fname:
                 unit.write(f"{base_fname}|{pred_str}\n")
-                text.write(f"{base_fname}|{trans}\n")
+                text.write(f"{base_fname}|{all_trans}\n")
+                time.write(f"{all_dur}\n")
             else:
                 unit.write(f"{pred_str}\n")
-                text.write(f"{trans}\n")
-        # except:
-        #     print(i)
+                text.write(f"{all_trans}\n")
+                time.write(f"{all_dur}\n")
+        
     del generator
 
 

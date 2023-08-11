@@ -125,10 +125,9 @@ class SpeechDLMCriterion(FairseqCriterion):
         2) the sample size, which is used as the denominator for the gradient
         3) logging outputs to display while training
         """
-        tok_output = model(**sample["net_input"], full_context_alignment=False)
-        ctc_output = model(**sample["net_input"], full_context_alignment=True) if "ctc" in self.targets else None
+        output = model(**sample["net_input"])
         loss_dict, stats_dict = self.compute_loss(
-            model, tok_output, ctc_output, sample, reduce=reduce
+            model, output, sample, reduce=reduce
         )
         nsentences = sample["net_input"]["src_tokens"][self.channels[0]].size(0)
 
@@ -232,27 +231,26 @@ class SpeechDLMCriterion(FairseqCriterion):
 
         return training_loss, sample_size_all, logging_output
 
-    def compute_loss(self, model, tok_output, ctc_output, sample, reduce=True):
+    def compute_loss(self, model, output, sample, reduce=True):
         # Get the model outputs and target
-        tok_lprobs_dict = model.get_normalized_probs(tok_output, log_probs=True)
-        ctc_lprobs_dict = model.get_normalized_probs(ctc_output, log_probs=True) if ctc_output is not None else None
+        lprobs_dict = model.get_normalized_probs(output, log_probs=True)
         target_dict = model.get_targets(sample, None)
 
         # Init the dictionaries
         loss_dict, stats_dict = {}, {}
 
-        for channel in tok_lprobs_dict:
+        for channel in lprobs_dict:
             # Init the dictionaries
             loss_dict[channel], stats_dict[channel] = {}, {}
 
-            for pred_channel in tok_lprobs_dict[channel]:
+            for pred_channel in lprobs_dict[channel]:
                 # Init the dictionaries
                 loss_dict[channel][pred_channel] = {}
                 stats_dict[channel][pred_channel] = {}
 
                 # Get token & duration predictions
-                tok_outs = tok_lprobs_dict[channel][pred_channel]
-                ctc_lprobs = ctc_lprobs_dict[channel][pred_channel] if ctc_lprobs_dict else None
+                tok_outs = lprobs_dict[channel][pred_channel]
+                ctc_lprobs = lprobs_dict[channel][pred_channel]["ctc"] if lprobs_dict else None
                 if not isinstance(tok_outs, dict):
                     token_lprobs = tok_outs
                 else:
@@ -263,8 +261,7 @@ class SpeechDLMCriterion(FairseqCriterion):
                 token_preds = token_lprobs.argmax(dim=-1)
 
                 if ctc_lprobs is not None:
-                    ctc_lprobs = ctc_lprobs.transpose(0, 1)
-                    ctc_preds = ctc_lprobs.transpose(0, 1).argmax(dim=-1)
+                    ctc_lprobs = ctc_lprobs
 
                 # Get edge indices
                 if "edge" in self.targets or "duration" in self.targets:
@@ -309,18 +306,19 @@ class SpeechDLMCriterion(FairseqCriterion):
                         c_err = c_len = w_err = w_len = 0
                         target = target_dict["ctc"]["ctc_tokens"][pred_channel]
                         target_lengths = target_dict["ctc"]["ctc_lengths"][pred_channel]
-                        if "src_lengths" in sample["net_input"]:
-                            input_lengths = sample["net_input"]["src_lengths"]
-                        else:
-                            if net_output["padding_mask"] is not None:
-                                non_padding_mask = ~net_output["padding_mask"]
-                                input_lengths = non_padding_mask.long().sum(-1)
-                            else:
-                                input_lengths = ctc_lprobs.new_full(
-                                    (ctc_lprobs.size(1),), ctc_lprobs.size(0), dtype=torch.long
-                                )
+                        target_frames = target_dict["ctc"]["ctc_frames"][pred_channel]
+
+                        input_lengths = torch.LongTensor([frames.size(0) for frames in target_frames]).to(ctc_lprobs.device)
+                        
+                        seg_lprobs = torch.zeros((ctc_lprobs.size(0), max(input_lengths).item(), ctc_lprobs.size(2)), dtype=torch.float, requires_grad=True).to(ctc_lprobs.device)
+                        
+                        for i, prob in enumerate(ctc_lprobs):
+                            seg_lprobs[i][:input_lengths[i]] = prob[target_frames[i]]
+                        ctc_preds = seg_lprobs.argmax(-1).contiguous()
+                        seg_lprobs = seg_lprobs.transpose(0, 1).contiguous()
+                        
                         loss = F.ctc_loss(
-                            ctc_lprobs,
+                            seg_lprobs,
                             target,
                             input_lengths,
                             target_lengths,
@@ -328,6 +326,7 @@ class SpeechDLMCriterion(FairseqCriterion):
                             reduction="sum" if reduce else "none",
                             zero_infinity=True,
                         )
+
                     if t != "ctc":
                         correct = (preds == target).sum().float().cpu().item()
                     else:
@@ -456,9 +455,9 @@ class SpeechDLMCriterion(FairseqCriterion):
                             meters["{}_loss".format(prefix)].avg
                         ),
                     )     
-
-                accuracy = 100 * correct_sum / count_sum
-                metrics.log_scalar("{}_pred_acc".format(prefix), accuracy, round=3)
+                if "ctc" not in prefix:
+                    accuracy = 100 * correct_sum / count_sum
+                    metrics.log_scalar("{}_pred_acc".format(prefix), accuracy, round=3)
 
         # Logging training loss
         sample_size = sum(log.get("sample_size", 0) for log in logging_outputs)

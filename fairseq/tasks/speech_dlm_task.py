@@ -324,9 +324,11 @@ class SpeechDLMTask(LegacyFairseqTask):
 
         channel_unit_datasets = {}
         channel_text_datasets = {}
+        channel_time_datasets = {}
         for channel in self.channels:
             unit_path = os.path.join(data_path, split + "." + channel)
             text_path = os.path.join(data_path, split + "." + channel.replace("unit", "text"))
+            time_path = os.path.join(data_path, split + "." + channel.replace("unit", "time"))
             in_dict = self.dicts[channel]
             text_dict = self.ctc_dicts[channel]
             
@@ -338,6 +340,20 @@ class SpeechDLMTask(LegacyFairseqTask):
                 text_path, text_dict, self.args.dataset_impl, combine=combine
             )
 
+            time_dataset = []
+            try:
+                with open(time_path) as f:
+                    for line in f.readlines():
+                        durs = line.strip().split()
+                        times = {'start': [], 'end': []}
+                        for dur in durs:
+                            start, end = map(int, dur.split(':'))
+                            times['start'].append(start)
+                            times['end'].append(end)
+                        time_dataset.append(times)
+            except:
+                pass
+
             if unit_dataset is None:
                 raise FileNotFoundError(
                     "[{}] Unit Dataset not found: {} ({})".format(channel, split, unit_path)
@@ -345,6 +361,10 @@ class SpeechDLMTask(LegacyFairseqTask):
             if text_dataset is None and self.ctc_prediction:
                 raise FileNotFoundError(
                     "[{}] Text Dataset not found: {} ({})".format(channel, split, text_path)
+                )
+            if len(time_dataset) == 0 and self.ctc_prediction:
+                raise FileNotFoundError(
+                    "[{}] Time Dataset not found: {} ({})".format(channel, split, time_path)
                 )
             
             unit_dataset = maybe_shorten_dataset(
@@ -355,6 +375,7 @@ class SpeechDLMTask(LegacyFairseqTask):
                 self.args.tokens_per_sample,
                 self.args.seed,
             )
+
             text_dataset = maybe_shorten_dataset(
                 text_dataset,
                 split,
@@ -391,13 +412,16 @@ class SpeechDLMTask(LegacyFairseqTask):
             )
 
             channel_text_datasets[channel] = text_dataset
+            channel_time_datasets[channel] = time_dataset
 
         self.datasets[split] = SpeechDLMDataset(
             unit_datasets=channel_unit_datasets,
             text_datasets=channel_text_datasets,
+            time_datasets=channel_time_datasets,
             targets=self.targets,
             max_target_durations=self.max_target_durations,
             shuffle=True,
+            sep=self.text_dictionary.indices["<SEP>"],
         )
 
     def build_dataset_for_inference(self, src_tokens, src_lengths, **kwargs):

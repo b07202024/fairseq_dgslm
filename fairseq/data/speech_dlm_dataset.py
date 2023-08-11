@@ -7,6 +7,7 @@ from collections import OrderedDict
 
 import numpy as np
 import torch
+import random
 
 from fairseq.data import FairseqDataset, MonolingualDataset, data_utils
 from fairseq.data.shorten_dataset import TruncateDataset, RandomCropDataset
@@ -49,7 +50,7 @@ class SpeechDLMDataset(FairseqDataset):
     """
 
     def __init__(
-        self, unit_datasets, text_datasets, targets=None, max_target_durations=None, shuffle=False
+        self, unit_datasets, text_datasets, time_datasets, targets=None, max_target_durations=None, shuffle=False, sep=None,
     ):
         super().__init__()
         if isinstance(unit_datasets, dict):
@@ -68,6 +69,7 @@ class SpeechDLMDataset(FairseqDataset):
 
         self.unit_datasets = unit_datasets
         self.text_datasets = text_datasets
+        self.time_datasets = time_datasets
         self.targets = targets
         if max_target_durations is not None and max_target_durations > 0:
             self.max_target_durations = max_target_durations
@@ -77,6 +79,7 @@ class SpeechDLMDataset(FairseqDataset):
         self.vocab = next(iter(unit_datasets.values())).vocab
         self.length = len(next(iter(unit_datasets.values())))
         self.shuffle = shuffle
+        self.sep = sep
 
         for channel, dataset in unit_datasets.items():
             assert (
@@ -102,6 +105,26 @@ class SpeechDLMDataset(FairseqDataset):
             ), "unk token is expected to be the same"
 
     def __getitem__(self, index):
+        try:
+            ctc_seg = {channel: torch.randint(len(self.time_datasets[channel][index]['start']), (1,)) for channel in self.time_datasets}
+        except:
+            ctc_seg = {channel: torch.tensor(0) for channel in self.time_datasets}
+        def get_seg(dataset, seg, mode):
+            if mode == 'text':
+                sentences = (dataset[index] == self.sep).nonzero()
+                start = sentences[seg - 1] + 1 if seg > 0 else 0
+                end = -1 if seg >= len(sentences) else sentences[seg]
+                return dataset[index][start:end] if end > 0 else dataset[index][start:]
+                
+            elif mode == 'frame':
+                if seg < len(dataset[index]['start']):
+                    start = dataset[index]['start'][seg]
+                    end = dataset[index]['end'][seg]
+                else:
+                    start = 0
+                    end = 1
+                return torch.LongTensor(list(range(start, end)))
+
         source = OrderedDict(
             [
                 (key, dataset[index]["source"])
@@ -110,15 +133,21 @@ class SpeechDLMDataset(FairseqDataset):
         )
         text = OrderedDict(
             [
-                (key, dataset[index])
+                (key, get_seg(dataset, ctc_seg[key], 'text'))
                 for (key, dataset) in self.text_datasets.items()
             ]
         )
-
+        time = OrderedDict(
+            [
+                (key, get_seg(dataset, ctc_seg[key], 'frame'))
+                for (key, dataset) in self.time_datasets.items()
+            ]
+        )
         item = {
             "id": index,
             "source": source,
             "target_ctc": text,
+            "frame_ctc": time,
             "target_next": None,
             "target_edge": None,
             "target_duration": None,
@@ -129,9 +158,10 @@ class SpeechDLMDataset(FairseqDataset):
             for channel in self.unit_datasets:
                 target = self._get_target(index, channel)
                 for t in target:
-                    if item[f"target_{t}"] is None:
-                        item[f"target_{t}"] = OrderedDict()
-                    item[f"target_{t}"][channel] = target[t]
+                    if t != "ctc":
+                        if item[f"target_{t}"] is None:
+                            item[f"target_{t}"] = OrderedDict()
+                        item[f"target_{t}"][channel] = target[t]
 
         return item
 
@@ -186,7 +216,7 @@ class SpeechDLMDataset(FairseqDataset):
 
                     target[t] = edge_unit_counts
                 elif t == "ctc":
-                    target[t] = self.text_datasets[channel][index]
+                    target[t] = None
                 else:
                     raise Exception("invalid target " + t)
 
@@ -261,14 +291,17 @@ class SpeechDLMDataset(FairseqDataset):
                     res[channel] = torch.cat(
                         [s[key][channel] + i * max_size for i, s in enumerate(samples)]
                     )
-                elif key in "target_ctc_length":
+                elif key == "target_ctc_length":
                     res[channel] = torch.LongTensor([s["target_ctc"][channel].numel() for s in samples])
+                elif key == "frame_ctc":
+                    res[channel] = [s["frame_ctc"][channel] for s in samples]
 
             return res
 
         src_tokens = merge("source")
         ctc = merge("target_ctc")
         ctc_lengths = merge("target_ctc_length")
+        frame_ctc = merge("frame_ctc")
         tgt_next = merge("target_next")
         tgt_edge = merge("target_edge")
         tgt_duration = merge("target_duration")
@@ -288,7 +321,8 @@ class SpeechDLMDataset(FairseqDataset):
             "target": {
                 "ctc": {
                     "ctc_tokens": ctc,
-                    "ctc_lengths": ctc_lengths
+                    "ctc_lengths": ctc_lengths,
+                    "ctc_frames": frame_ctc
                 },
                 "next": tgt_next,
                 "edge": tgt_edge,
