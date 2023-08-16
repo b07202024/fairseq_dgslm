@@ -304,19 +304,31 @@ class SpeechDLMCriterion(FairseqCriterion):
                         preds = preds.round()
                     elif t == "ctc":
                         c_err = c_len = w_err = w_len = 0
+                        truth = predicted = []
                         target = target_dict["ctc"]["ctc_tokens"][pred_channel]
                         target_lengths = target_dict["ctc"]["ctc_lengths"][pred_channel]
                         target_frames = target_dict["ctc"]["ctc_frames"][pred_channel]
 
-                        input_lengths = torch.LongTensor([frames.size(0) for frames in target_frames]).to(ctc_lprobs.device)
+                        input_lengths = torch.LongTensor([frames.size(0) for segs in target_frames for frames in segs]).to(ctc_lprobs.device)
                         
-                        seg_lprobs = torch.zeros((ctc_lprobs.size(0), max(input_lengths).item(), ctc_lprobs.size(2)), dtype=torch.float, requires_grad=True).to(ctc_lprobs.device)
+                        B = target.size(0)
+                        T = torch.max(input_lengths).item()
+                        C = ctc_lprobs.size(2)
+                        seg_lprobs = torch.zeros((B, T, C), dtype=torch.float, requires_grad=True).to(ctc_lprobs.device)
                         
+                        sent_idx = 0
                         for i, prob in enumerate(ctc_lprobs):
-                            seg_lprobs[i][:input_lengths[i]] = prob[target_frames[i]]
+                            for j, frames in enumerate(target_frames[i]):
+                                # if frames[-1] >= prob.size(0):  # to prevent some bugs related to numbers of tokens
+                                #     print(frames[-1] - prob.size(0))
+                                #     end = (~(frames < prob.size(0))).nonzero()[0]
+                                #     frames = frames[:end]
+                                #     input_lengths[sent_idx] = frames.size(0)
+                                seg_lprobs[sent_idx][:input_lengths[sent_idx]] = prob[frames]
+                                sent_idx += 1
                         ctc_preds = seg_lprobs.argmax(-1).contiguous()
                         seg_lprobs = seg_lprobs.transpose(0, 1).contiguous()
-                        
+
                         loss = F.ctc_loss(
                             seg_lprobs,
                             target,
@@ -357,6 +369,8 @@ class SpeechDLMCriterion(FairseqCriterion):
 
                                     w_err += editdistance.eval(pred_words, targ_words)
                                     w_len += len(targ_words)
+                                    truth.append(' '.join(targ_words))
+                                    predicted.append(' '.join(pred_words))
 
                     loss_dict[channel][pred_channel][t] = loss
                     if t != 'ctc':
@@ -369,7 +383,9 @@ class SpeechDLMCriterion(FairseqCriterion):
                                 "c_errors": c_err,
                                 "c_total": c_len,
                                 "w_errors": w_err,
-                                "w_total": w_len
+                                "w_total": w_len,
+                                "ground_truth": truth,
+                                "predicted": predicted,
                             }
                         )
         return loss_dict, stats_dict

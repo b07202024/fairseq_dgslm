@@ -413,6 +413,10 @@ class SpeechDLMTask(LegacyFairseqTask):
 
             channel_text_datasets[channel] = text_dataset
             channel_time_datasets[channel] = time_dataset
+        for channel in channel_unit_datasets:
+            for unit, text, time in zip(channel_unit_datasets[channel], channel_text_datasets[channel], channel_time_datasets[channel]):
+                if time['end'][-1] >= unit["source"].size(0):
+                    breakpoint()
 
         self.datasets[split] = SpeechDLMDataset(
             unit_datasets=channel_unit_datasets,

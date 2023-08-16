@@ -63,14 +63,13 @@ class HubertFeatureReader:
             feat = []
             for start in range(0, x.size(1), self.max_chunk):
                 x_chunk = x[:, start: start + self.max_chunk]
-                feat_chunk, _ = self.model.extract_features(
-                    source=x_chunk,
-                    padding_mask=None,
-                    mask=False,
-                    output_layer=self.layer,
-                )
-                feat.append(feat_chunk)
-        if feat != []:
-            return torch.cat(feat, 1).squeeze(0)
-        else:
-            return None
+                if x_chunk.size(1) > 320:
+                    feat_chunk, _ = self.model.extract_features(
+                        source=x_chunk,
+                        padding_mask=None,
+                        mask=False,
+                        output_layer=self.layer,
+                    )
+                    feat.append(feat_chunk)
+
+        return torch.cat(feat, 1).squeeze(0)

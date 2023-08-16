@@ -7,7 +7,6 @@ from collections import OrderedDict
 
 import numpy as np
 import torch
-import random
 
 from fairseq.data import FairseqDataset, MonolingualDataset, data_utils
 from fairseq.data.shorten_dataset import TruncateDataset, RandomCropDataset
@@ -105,44 +104,40 @@ class SpeechDLMDataset(FairseqDataset):
             ), "unk token is expected to be the same"
 
     def __getitem__(self, index):
-        try:
-            ctc_seg = {channel: torch.randint(len(self.time_datasets[channel][index]['start']), (1,)) for channel in self.time_datasets}
-        except:
-            ctc_seg = {channel: torch.tensor(0) for channel in self.time_datasets}
-        def get_seg(dataset, seg, mode):
+
+        def get_seg(dataset, mode):
             if mode == 'text':
-                sentences = (dataset[index] == self.sep).nonzero()
-                start = sentences[seg - 1] + 1 if seg > 0 else 0
-                end = -1 if seg >= len(sentences) else sentences[seg]
-                return dataset[index][start:end] if end > 0 else dataset[index][start:]
-                
+                sentences = []
+                sep_idx = (dataset[index] == self.sep).nonzero()
+                for i in range(sep_idx[:-1].size(0)):
+                    start = sep_idx[i] + 1
+                    end = sep_idx[i + 1]
+                    sentences.append(dataset[index][start:end])
+                return sentences
+
             elif mode == 'frame':
-                if seg < len(dataset[index]['start']):
-                    start = dataset[index]['start'][seg]
-                    end = dataset[index]['end'][seg]
-                else:
-                    start = 0
-                    end = 1
-                return torch.LongTensor(list(range(start, end)))
+                return [torch.LongTensor(list(range(start, end))) for start, end in zip(dataset[index]['start'], dataset[index]['end'])]
 
         source = OrderedDict(
             [
+
                 (key, dataset[index]["source"])
                 for (key, dataset) in self.unit_datasets.items()
             ]
         )
         text = OrderedDict(
             [
-                (key, get_seg(dataset, ctc_seg[key], 'text'))
+                (key, get_seg(dataset, 'text'))
                 for (key, dataset) in self.text_datasets.items()
             ]
         )
         time = OrderedDict(
             [
-                (key, get_seg(dataset, ctc_seg[key], 'frame'))
+                (key, get_seg(dataset, 'frame'))
                 for (key, dataset) in self.time_datasets.items()
             ]
         )
+
         item = {
             "id": index,
             "source": source,
@@ -275,12 +270,18 @@ class SpeechDLMDataset(FairseqDataset):
                 return None
             res = OrderedDict()
             for channel in samples[0][mapped_key]:
-                if key in ["source", "target_next", "target_ctc"]:
+                if key in ["source", "target_next"]:
                     # fill batch of shape: (batch_size, max_size)
                     res[channel] = data_utils.collate_tokens(
                         [s[key][channel] for s in samples],
                         pad_idx,
                         eos_idx,
+                        left_pad=False,
+                    )
+                elif key == "target_ctc":
+                    res[channel] = data_utils.collate_tokens(
+                        [sent for s in samples for sent in s[key][channel]],
+                        pad_idx,
                         left_pad=False,
                     )
                 elif key in ["target_edge", "target_duration"]:
@@ -292,7 +293,7 @@ class SpeechDLMDataset(FairseqDataset):
                         [s[key][channel] + i * max_size for i, s in enumerate(samples)]
                     )
                 elif key == "target_ctc_length":
-                    res[channel] = torch.LongTensor([s["target_ctc"][channel].numel() for s in samples])
+                    res[channel] = torch.LongTensor([sent.numel() for s in samples for sent in s["target_ctc"][channel]])
                 elif key == "frame_ctc":
                     res[channel] = [s["frame_ctc"][channel] for s in samples]
 

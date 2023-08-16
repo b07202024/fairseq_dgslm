@@ -12,10 +12,10 @@ import numpy as np
 import joblib
 import sys
 import tqdm
-import re
+
 sys.path.append('/home/yukuanfu88/iven/fairseq_dgslm')
 from examples.textless_nlp.gslm.speech2unit.clustering.utils import (
-    get_audio_files,
+    get_audio_files, text_processing
 )
 from examples.textless_nlp.gslm.speech2unit.pretrained.utils import (
     get_feature_iterator,
@@ -43,11 +43,14 @@ def gen_kmeans(
     time_path = args.out_quantized_file_path + '.time' + channel_name
     with open(unit_path, "w") as unit, open(text_path, "w") as text, open(time_path, "w") as time:    
         for i, feats in enumerate(tqdm.tqdm(iterator, total=num_files)):
-            pred = kmeans_model.predict(feats)
-            pred_str = " ".join(str(p) for p in pred)
-            trans_path = root + '/' + fnames[i].replace('flac', channel_name)
-            # trans_path = root + '/' + '-'.join(fnames[i].split('-')[:2]) + ".trans.txt"
             base_fname = os.path.basename(fnames[i]).rstrip('.'+args.extension.lstrip('.'))
+            pred = kmeans_model.predict(feats)
+            if len(pred) > args.max_tokens:
+                print("Truncate {} from {} to {}".format(base_fname, len(pred), args.max_tokens))
+                pred = pred[:args.max_tokens]
+            
+            pred_str = " ".join(str(p) for p in pred)
+            trans_path = root + '/' + fnames[i].replace(args.extension.lstrip('.'), channel_name)
             with open(trans_path) as tf:
                 conts = tf.readlines()
                 all_trans = []
@@ -57,34 +60,21 @@ def gen_kmeans(
                     start, end = dur.split(':')
                     start = int(float(start) * 16000 / 320)
                     end = int(float(end) * 16000 / 320)
-                    if end > 6100:
-                        break
+
                     if end > len(pred):
+                        if end - len(pred) > 2:
+                            break # do not included the truncated text
+                            # print("{}: {} -> {}".format(base_fname, end, len(pred)))
                         end = len(pred)
-                    if end <= start:
-                        if cont != conts[-1]:
-                            print(base_fname)
-                        break
-                    trans = trans.strip().upper()
-                    trans = re.sub('\\(\\(.*?\\)\\)|\\[.*?\\] ', '', trans)
-                    while "  " in trans:
-                        trans = trans.replace("  ", " ")
-                    trans = trans.replace(" ", "|")
-                    if trans != '':
-                        all_trans.append(' '.join(trans))
+                        assert end > start, "End time should be greater than start time"
+                    trans = text_processing(trans)
+
+                    if trans != "|":
+                        all_trans.append(trans)
                         all_dur.append(f'{start}:{end}')
-                all_trans = ' <SEP> '.join(all_trans) if all_trans != [] else '|'
-                all_dur = ' '.join(all_dur) if all_dur != [] else '0:1'
-            # with open(trans_path) as tf:
-            #     for line in tf.readlines():
-            #         line = line.strip()
-            #         name = line.split(' ')[0]
-            #         if name == fnames[i].split('/')[-1].replace('.flac', ''):
-            #             trans = line.split(' ', 1)[1]
-            #             trans = trans.replace(" ", "|") + "|"
-            #             trans = ' '.join(trans)
-            #             break
-            
+                all_trans = '[SEP] ' + ' [SEP] '.join(all_trans) + " [SEP]"
+                all_dur = ' '.join(all_dur)
+
             if args.channel_id is not None:
                 base_fname = base_fname+f'-channel{args.channel_id}'
             if not args.hide_fname:
@@ -95,7 +85,7 @@ def gen_kmeans(
                 unit.write(f"{pred_str}\n")
                 text.write(f"{all_trans}\n")
                 time.write(f"{all_dur}\n")
-        
+
     del generator
 
 
@@ -161,6 +151,12 @@ def get_parser():
         choices=['1', '2'],
         help="The audio channel to extract the units in case of stereo file.",
         default=None,
+    )
+    parser.add_argument(
+        "--max_tokens",
+        type=int,
+        default=6144,
+        help="max length of units"
     )
     parser.add_argument(
         "--hide-fname", action='store_true',
