@@ -6,7 +6,7 @@
 from typing import List, Tuple
 import re
 
-event2char = {"[LAUGHTER]": '1', "[SIGH]": '2', "[LIPSMACK]": '3',"[MN]": '4', "[COUGH]": '5'}
+event2char = {"[LAUGHTER]": '1', "[LAUGH]": '1', "[SIGH]": '2', "[LIPSMACK]": '3',"[MN]": '4', "[COUGH]": '5', "[BREATH]": '6', "[SNEEZE]": '7'}
 char2event = {v: k for k, v in event2char.items()}
 
 def get_audio_files(manifest_path: str) -> Tuple[str, List[str], List[int]]:
@@ -23,11 +23,11 @@ def get_audio_files(manifest_path: str) -> Tuple[str, List[str], List[int]]:
     return root_dir, fnames, sizes
 
 def text_processing(trans, keep_events=True):
-    trans = trans.strip().upper()
+    trans = trans.strip().upper().replace("._", " ").replace("_", "").replace('[UH]', 'UH').replace('[UM]', 'UM').replace('<SPOKEN_NOISE>', '[VOCALIZED-NOISE]').replace('.PERIOD', 'PERIOD').replace('-HYPHEN', 'HYPHEN').replace("-", "").replace(".", "")
     if keep_events:
         for event in event2char:
             trans = trans.replace(event, event2char[event])
-    trans = " " + re.sub('\\(\\(.*?\\)\\)|\\[.*?\\]', '', trans).replace("-", "").replace("_", "").replace(".", "") + " "
+    trans = " " + re.sub('\\(\\(.*?\\)\\)|\\[.*?\\]', '', trans) + " "
     while "  " in trans:
         trans = trans.replace("  ", " ")
     trans = trans.replace(" ", "|")

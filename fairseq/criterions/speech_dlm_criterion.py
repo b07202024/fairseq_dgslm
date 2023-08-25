@@ -51,6 +51,12 @@ class SpeechDLMCriterionConfig(FairseqDataclass):
             "(default: 0)"
         },
     )
+    num_code: int = field(
+        default=1,
+        metadata={
+            "help": "number of predicted codecs (hubert tokens are always 1)"
+        }
+    )
 
 
 @register_criterion("speech_dlm_criterion", dataclass=SpeechDLMCriterionConfig)
@@ -82,6 +88,7 @@ class SpeechDLMCriterion(FairseqCriterion):
 
         self.channels = task.channels
         self.targets = task.targets
+        self.num_code = task.num_code
         self.text_dictionary = task.text_dictionary
         self.delayed_duration_target = task.delayed_duration_target
 
@@ -136,9 +143,12 @@ class SpeechDLMCriterion(FairseqCriterion):
         }
         logging_output["nsentences"] = nsentences
 
-        loss_all = {t: 0 for t in self.targets}
-        correct_all = {t: 0 for t in self.targets}
-        count_all = {t: 0 for t in self.targets}
+        loss_all = {t: [0 for _ in range(self.num_code)] for t in self.targets}
+        correct_all = {t: [0 for _ in range(self.num_code)] for t in self.targets}
+        count_all = {t: [0 for _ in range(self.num_code)] for t in self.targets}
+        if "ctc" in self.targets:
+            loss_all["ctc"] = 0
+            count_all["ctc"] = 0
         wer_all = wtot_all = cer_all = ctot_all = 0
         ntokens_all = 0
         sample_size_all = 0
@@ -164,43 +174,49 @@ class SpeechDLMCriterion(FairseqCriterion):
                 for t in self.targets:
                     log_key = log_keys[t]
                     loss = loss_dict[channel][pred_channel][t]
-                    
                     if t != "ctc":
                         correct, count = stats_dict[channel][pred_channel][t]
                     else:
                         count, dist = stats_dict[channel][pred_channel][t]
 
                     # Log the statistics
-                    logging_output["{}{}_loss".format(prefix, log_key)] = loss.data
-                    logging_output["{}{}_count".format(prefix, log_key)] = count
                     if t != "ctc":
-                        logging_output["{}{}_correct".format(prefix, log_key)] = correct
+                        for i in range(self.num_code):
+                            logging_output["{}{}_{}_loss".format(prefix, i, log_key)] = loss[i].data
+                            logging_output["{}{}_{}_count".format(prefix, i, log_key)] = count[i]
+                            logging_output["{}{}_{}_correct".format(prefix, i, log_key)] = correct[i]
                     else:
+                        if type(loss) != float:
+                            logging_output["{}{}_loss".format(prefix, log_key)] = loss.data
+                        logging_output["{}{}_count".format(prefix, log_key)] = count
                         logging_output["{}{}_w_errors".format(prefix, log_key)] = dist["w_errors"]
                         logging_output["{}{}_w_total".format(prefix, log_key)] = dist["w_total"]
                         logging_output["{}{}_c_errors".format(prefix, log_key)] = dist["c_errors"]
                         logging_output["{}{}_c_total".format(prefix, log_key)] = dist["c_total"]
 
                     # Scale the training loss by weights
-                    target_loss = loss * self.channel_weights[channel]
+                    target_loss = [l * self.channel_weights[channel] for l in loss] if t != "ctc" else loss * self.channel_weights[channel]
                     if pred_channel == channel:
-                        target_loss = target_loss * self.main_channel_weight
+                        target_loss = [l * self.main_channel_weight for l in target_loss] if t != "ctc" else loss * self.channel_weights[channel]
                     else:
-                        target_loss = target_loss * self.cross_channel_weight
+                        target_loss = [l * self.cross_channel_weight for l in target_loss] if t != "ctc" else loss * self.channel_weights[channel]
                     # Normalize the losses in the training by the number of edges
                     if t in ["edge", "duration"]:
-                        target_loss = target_loss / count * sample_size
+                        target_loss = [l / c * sample_size for l, c in zip(target_loss, count)]
 
                     # Update the statistics
-                    loss_all[t] += target_loss
                     if t != "ctc":
-                        correct_all[t] += correct
+                        for i in range(self.num_code):
+                            loss_all[t][i] += target_loss[i]
+                            correct_all[t][i] += correct[i]
+                            count_all[t][i] += count[i]
                     else:
+                        loss_all[t] += target_loss
                         wer_all += dist["w_errors"]
                         wtot_all += dist["w_total"]
                         cer_all += dist["c_errors"]
                         ctot_all += dist["c_total"]
-                    count_all[t] += count
+                        count_all[t] += count
 
         # Logging the average statistics
         logging_output["ntokens"] = ntokens_all
@@ -212,21 +228,30 @@ class SpeechDLMCriterion(FairseqCriterion):
                 "duration": "edge_duration",
                 "ctc": "ctc"
             }[t]
-            logging_output["{}_loss".format(log_key)] = loss_all[t].data
+            
             if t != "ctc":
-                logging_output["{}_correct".format(log_key)] = correct_all[t]
+                for i in range(self.num_code):
+                    logging_output["{}_{}_loss".format(i, log_key)] = loss_all[t][i].data
+                    logging_output["{}_{}_correct".format(i, log_key)] = correct_all[t][i]
+                    logging_output["{}_{}_count".format(i, log_key)] = count_all[t][i]
             else:
+                if type(loss_all[t]) != float:
+                    logging_output["{}_loss".format(log_key)] = loss_all[t].data
                 logging_output["{}_w_errors".format(log_key)] = wer_all
                 logging_output["{}_w_total".format(log_key)] = wtot_all
                 logging_output["{}_c_errors".format(log_key)] = cer_all
                 logging_output["{}_c_total".format(log_key)] = ctot_all
-            logging_output["{}_count".format(log_key)] = count_all[t]
+                logging_output["{}_count".format(log_key)] = count_all[t]
 
 
         # Define the training loss
         training_loss = 0
         for t in self.targets:
-            training_loss += loss_all[t] * self.target_weights[t]
+            if t != "ctc":
+                for i in range(self.num_code):
+                    training_loss += loss_all[t][i] * self.target_weights[t]
+            else:
+                training_loss += loss_all[t] * self.target_weights[t]
         logging_output["loss"] = training_loss.data
 
         return training_loss, sample_size_all, logging_output
@@ -250,18 +275,15 @@ class SpeechDLMCriterion(FairseqCriterion):
 
                 # Get token & duration predictions
                 tok_outs = lprobs_dict[channel][pred_channel]
-                ctc_lprobs = lprobs_dict[channel][pred_channel]["ctc"] if lprobs_dict else None
+                ctc_lprobs = lprobs_dict[channel][pred_channel]["ctc"]
                 if not isinstance(tok_outs, dict):
                     token_lprobs = tok_outs
                 else:
                     token_lprobs = tok_outs["pred_token"]
                     dur_preds = tok_outs["pred_duration"]
-                    dur_preds = dur_preds.view(-1)
-                token_lprobs = token_lprobs.view(-1, token_lprobs.size(-1))
+                    dur_preds = dur_preds.permute(2, 0, 1, 3).view(self.num_code, -1)
+                token_lprobs = token_lprobs.permute(2, 0, 1, 3).view(self.num_code, -1, token_lprobs.size(-1))
                 token_preds = token_lprobs.argmax(dim=-1)
-
-                if ctc_lprobs is not None:
-                    ctc_lprobs = ctc_lprobs
 
                 # Get edge indices
                 if "edge" in self.targets or "duration" in self.targets:
@@ -269,115 +291,124 @@ class SpeechDLMCriterion(FairseqCriterion):
 
                 # Compute loss and statistics
                 for t in self.targets:
+                    correct = []
+                    count = []
                     if t in ["next", "edge"]:
-                        if t == "next":
-                            target = target_dict["next"][pred_channel].view(-1)
-                            lprobs = token_lprobs
-                            preds = token_preds
-                        elif t == "edge":
-                            target = target_dict["edge"][pred_channel]
-                            lprobs = token_lprobs[edge_indices]
-                            preds = token_preds[edge_indices]
+                        loss = []
+                        for i in range(self.num_code):
+                            if t == "next":
+                                target = target_dict["next"][pred_channel][i].view(-1)
+                                lprobs = token_lprobs[i]
+                                preds = token_preds[i]
+                            elif t == "edge":
+                                target = target_dict["edge"][pred_channel][i]
+                                lprobs = token_lprobs[i][edge_indices[i]]
+                                preds = token_preds[i][edge_indices[i]]
+                            loss.append(
+                                F.nll_loss(
+                                    lprobs,
+                                    target,
+                                    ignore_index=self.padding_idx,
+                                    reduction="sum" if reduce else "none",
+                                )
+                            )
+                            count.append(float(target.size(0)))
+                            correct.append((preds == target).sum().float().cpu().item())
 
-                        loss = F.nll_loss(
-                            lprobs,
-                            target,
-                            ignore_index=self.padding_idx,
-                            reduction="sum" if reduce else "none",
-                        )
                     elif t == "duration":
-                        target = target_dict["duration"][pred_channel]
-                        if self.delayed_duration_target:
-                            duration_indices = edge_indices + 1
-                            if duration_indices[-1] == len(dur_preds):
-                                duration_indices = duration_indices[:-1]
-                                target = target[:-1]
-                        else:
-                            duration_indices = edge_indices
-                        preds = dur_preds[duration_indices]
+                        loss = []
+                        for i in range(self.num_code):
+                            target = target_dict["duration"][pred_channel][i]
+                            if self.delayed_duration_target:
+                                duration_indices = edge_indices[i] + 1
+                                if duration_indices[-1] == len(dur_preds[i]):
+                                    duration_indices = duration_indices[:-1]
+                                    target = target[:-1]
+                            else:
+                                duration_indices = edge_indices[i]
+                            preds = dur_preds[i][duration_indices]
 
-                        loss = F.l1_loss(
-                            preds,
-                            target,
-                            reduction="sum" if reduce else "none",
-                        )
-                        preds = preds.round()
+                            loss.append(
+                                F.l1_loss(
+                                    preds,
+                                    target,
+                                    reduction="sum" if reduce else "none",
+                                )
+                            )
+                            preds = preds.round()
+                            count.append(float(target.size(0)))
+                            correct.append((preds == target).sum().float().cpu().item())
                     elif t == "ctc":
+                        assert ctc_lprobs is not None, "ctc_lprobs can not be None"
                         c_err = c_len = w_err = w_len = 0
                         truth = predicted = []
                         target = target_dict["ctc"]["ctc_tokens"][pred_channel]
-                        target_lengths = target_dict["ctc"]["ctc_lengths"][pred_channel]
-                        target_frames = target_dict["ctc"]["ctc_frames"][pred_channel]
+                        if target != None:
+                            target_lengths = target_dict["ctc"]["ctc_lengths"][pred_channel]
+                            target_frames = target_dict["ctc"]["ctc_frames"][pred_channel]
+                            input_lengths = torch.LongTensor([frames.size(0) for segs in target_frames for frames in segs]).to(ctc_lprobs.device)
 
-                        input_lengths = torch.LongTensor([frames.size(0) for segs in target_frames for frames in segs]).to(ctc_lprobs.device)
-                        
-                        B = target.size(0)
-                        T = torch.max(input_lengths).item()
-                        C = ctc_lprobs.size(2)
-                        seg_lprobs = torch.zeros((B, T, C), dtype=torch.float, requires_grad=True).to(ctc_lprobs.device)
-                        
-                        sent_idx = 0
-                        for i, prob in enumerate(ctc_lprobs):
-                            for j, frames in enumerate(target_frames[i]):
-                                # if frames[-1] >= prob.size(0):  # to prevent some bugs related to numbers of tokens
-                                #     print(frames[-1] - prob.size(0))
-                                #     end = (~(frames < prob.size(0))).nonzero()[0]
-                                #     frames = frames[:end]
-                                #     input_lengths[sent_idx] = frames.size(0)
-                                seg_lprobs[sent_idx][:input_lengths[sent_idx]] = prob[frames]
-                                sent_idx += 1
-                        ctc_preds = seg_lprobs.argmax(-1).contiguous()
-                        seg_lprobs = seg_lprobs.transpose(0, 1).contiguous()
+                            B = target.size(0)
+                            T = torch.max(input_lengths).item()
+                            C = ctc_lprobs.size(2)
+                            seg_lprobs = torch.zeros((B, T, C), dtype=torch.float, requires_grad=True).to(ctc_lprobs.device)
 
-                        loss = F.ctc_loss(
-                            seg_lprobs,
-                            target,
-                            input_lengths,
-                            target_lengths,
-                            blank=self.text_dictionary.pad(),
-                            reduction="sum" if reduce else "none",
-                            zero_infinity=True,
-                        )
+                            sent_idx = 0
+                            for i, prob in enumerate(ctc_lprobs):
+                                for j, frames in enumerate(target_frames[i]):
+                                    seg_lprobs[sent_idx][:input_lengths[sent_idx]] = prob[frames]
+                                    sent_idx += 1
 
-                    if t != "ctc":
-                        correct = (preds == target).sum().float().cpu().item()
-                    else:
-                        if not model.training:
-                            import editdistance
-                            with torch.no_grad():
-                                for pred, targ, inp_l in zip(
-                                    ctc_preds,
-                                    target,
-                                    input_lengths
-                                ):
-                                    pred = pred[:inp_l]
-                                    tarl = (targ != self.text_dictionary.pad()) & (targ != self.text_dictionary.eos())
-                                    targ = targ[tarl]
-                                    targ_units_arr = targ.tolist()
+                            ctc_preds = seg_lprobs.argmax(-1).contiguous()
+                            seg_lprobs = seg_lprobs.transpose(0, 1).contiguous()
 
-                                    toks = pred.unique_consecutive()
-                                    pred_units_arr = toks[toks != self.text_dictionary.pad()].tolist()
+                            loss = F.ctc_loss(
+                                seg_lprobs,
+                                target,
+                                input_lengths,
+                                target_lengths,
+                                blank=self.text_dictionary.pad(),
+                                reduction="sum" if reduce else "none",
+                                zero_infinity=True,
+                            )
+                        else:
+                            loss = 0.
 
-                                    c_err += editdistance.eval(pred_units_arr, targ_units_arr)
-                                    c_len += len(targ_units_arr)
+                    if t == "ctc" and not model.training:
+                        import editdistance
+                        with torch.no_grad():
+                            for pred, targ, inp_l in zip(
+                                ctc_preds,
+                                target,
+                                input_lengths
+                            ):
+                                pred = pred[:inp_l]
+                                tarl = (targ != self.text_dictionary.pad()) & (targ != self.text_dictionary.eos())
+                                targ = targ[tarl]
+                                targ_units_arr = targ.tolist()
 
-                                    targ_units = self.text_dictionary.string(targ)
-                                    targ_words = post_process(targ_units, "letter").split()
+                                toks = pred.unique_consecutive()
+                                pred_units_arr = toks[toks != self.text_dictionary.pad()].tolist()
 
-                                    pred_units = self.text_dictionary.string(pred_units_arr)
-                                    pred_words = post_process(pred_units, "letter").split()
+                                c_err += editdistance.eval(pred_units_arr, targ_units_arr)
+                                c_len += len(targ_units_arr)
 
-                                    w_err += editdistance.eval(pred_words, targ_words)
-                                    w_len += len(targ_words)
-                                    truth.append(' '.join(targ_words))
-                                    predicted.append(' '.join(pred_words))
+                                targ_units = self.text_dictionary.string(targ)
+                                targ_words = post_process(targ_units, "letter").split()
+
+                                pred_units = self.text_dictionary.string(pred_units_arr)
+                                pred_words = post_process(pred_units, "letter").split()
+
+                                w_err += editdistance.eval(pred_words, targ_words)
+                                w_len += len(targ_words)
+                                truth.append(' '.join(targ_words))
+                                predicted.append(' '.join(pred_words))
 
                     loss_dict[channel][pred_channel][t] = loss
                     if t != 'ctc':
-                        count = float(target.size(0))
                         stats_dict[channel][pred_channel][t] = (correct, count)
                     else:
-                        count = float(torch.sum(target.view(-1) != self.text_dictionary.pad()))
+                        count = 0 if target is None else float(torch.sum(target.view(-1) != self.text_dictionary.pad()))
                         stats_dict[channel][pred_channel][t] = (count, 
                             {
                                 "c_errors": c_err,
@@ -395,6 +426,7 @@ class SpeechDLMCriterion(FairseqCriterion):
         """Aggregate logging outputs from data parallel training."""
         logging_keys = next(iter(logging_outputs)).keys()
         channels = [item[:-7] for item in logging_keys if item.endswith("ntokens")]
+        # num_code = set([int(item.replace(channels[0], '')[0]) for item in logging_keys if item.endswith("correct") and item.startswith(channels[0])])
         target_prefixes = set(
             [
                 item[:-5].split("]")[-1]
@@ -406,11 +438,12 @@ class SpeechDLMCriterion(FairseqCriterion):
             for target_prefix in target_prefixes:
                 prefix = "{}{}".format(channel_prefix, target_prefix)
                 count_sum = sum(
-                    log.get("{}_count".format(prefix), 0) for log in logging_outputs
-                )
-                correct_sum = sum(
-                    log.get("{}_correct".format(prefix), 0) for log in logging_outputs
-                )
+                        log.get("{}_count".format(prefix), 0) for log in logging_outputs
+                    )
+                if "ctc" not in prefix:
+                    correct_sum = sum(
+                            log.get("{}_correct".format(prefix), 0) for log in logging_outputs
+                        )
                 loss_sum = sum(
                     log.get("{}_loss".format(prefix), 0) for log in logging_outputs
                 )
@@ -436,13 +469,13 @@ class SpeechDLMCriterion(FairseqCriterion):
                     ctot_sum = sum(
                         log.get("{}_c_total".format(prefix), 0) for log in logging_outputs
                     )
-
-                    metrics.log_scalar(
-                        "{}_loss".format(prefix),
-                        loss_sum / count_sum,
-                        count_sum,
-                        round=3,
-                    )
+                    if count_sum > 0:
+                        metrics.log_scalar(
+                            "{}_loss".format(prefix),
+                            loss_sum / count_sum,
+                            count_sum,
+                            round=3,
+                        )
                     
                     if wtot_sum > 0 and ctot_sum > 0:
                         metrics.log_scalar(

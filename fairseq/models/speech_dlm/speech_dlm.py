@@ -121,6 +121,12 @@ class SpeechDLMConfig(FairseqDataclass):
             "help": "add ctc asr during training"
         },
     )
+    num_code: int = field(
+        default=1,
+        metadata={
+            "help": "number of predicted codecs (hubert tokens are always 1)"
+        }
+    )
     add_bos_token: bool = II("task.add_bos_token")
     tokens_per_sample: int = II("task.tokens_per_sample")
     max_target_positions: Optional[int] = II("task.max_target_positions")

@@ -32,8 +32,9 @@ class HubertFeatureReader:
         if self.use_cuda:
             self.model.cuda()
 
-    def read_audio(self, path, ref_len=None, channel_id=None):
-        wav, sr = sf.read(path)
+    def read_audio(self, path, ref_len=None, channel_id=None, sample_rate=16000):
+        wav, sr = librosa.load(path, sr=sample_rate, mono=False)
+        wav = wav.T
         
         if channel_id is not None:
             assert wav.ndim == 2, \
@@ -46,8 +47,8 @@ class HubertFeatureReader:
         assert wav.ndim == 1, wav.ndim
         # if sr != self.task.cfg.sample_rate:
         #     wav = librosa.resample(wav, orig_sr=sr, target_sr=self.task.cfg.sample_rate)
-        if ref_len is not None and abs(ref_len - len(wav)) > 160:
-            print(f"ref {ref_len} != read {len(wav)} ({path})")
+        # if ref_len is not None and abs(ref_len - len(wav)) > 160:
+        #     print(f"ref {ref_len} != read {len(wav)} ({path})")
         return wav
 
     def get_feats(self, file_path, ref_len=None, channel_id=None):

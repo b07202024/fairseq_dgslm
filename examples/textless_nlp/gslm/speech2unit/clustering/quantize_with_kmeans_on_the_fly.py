@@ -41,6 +41,7 @@ def gen_kmeans(
     unit_path = args.out_quantized_file_path + '.unit' + channel_name
     text_path = args.out_quantized_file_path + '.text' + channel_name
     time_path = args.out_quantized_file_path + '.time' + channel_name
+    # assert not (os.path.isfile(unit_path) or os.path.isfile(text_path) or os.path.isfile(time_path)), "Output files exist."
     with open(unit_path, "w") as unit, open(text_path, "w") as text, open(time_path, "w") as time:    
         for i, feats in enumerate(tqdm.tqdm(iterator, total=num_files)):
             base_fname = os.path.basename(fnames[i]).rstrip('.'+args.extension.lstrip('.'))
@@ -62,9 +63,8 @@ def gen_kmeans(
                     end = int(float(end) * 16000 / 320)
 
                     if end > len(pred):
-                        if end - len(pred) > 2:
+                        if end - len(pred) > 3:
                             break # do not included the truncated text
-                            # print("{}: {} -> {}".format(base_fname, end, len(pred)))
                         end = len(pred)
                         assert end > start, "End time should be greater than start time"
                     trans = text_processing(trans)

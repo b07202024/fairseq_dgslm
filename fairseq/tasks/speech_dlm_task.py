@@ -45,12 +45,26 @@ class SpeechDLMConfig(FairseqDataclass):
     data: Optional[str] = field(
         default=None, metadata={"help": "path to data directory"}
     )
-    channels: Optional[str] = field(
+    unit_channels: Optional[str] = field(
         default=None,
         metadata={
-            "help": 'comma-separated list of channels to load e.g., "unitA,unitB"'
-            "(default: load all possible channels in the data path)"
+            "help": 'comma-separated list of unit channels to load e.g., "unitA,unitB"'
+            "(default: load all possible unit channels in the data path)"
         },
+    )
+    text_channels: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": 'comma-separated list of text channels to load e.g., "textA,textB"'
+            "(default: load all possible text channels in the data path)"
+        }
+    )
+    frame_channels: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": 'comma-separated list of frame channels to load e.g., "timeA,timeB"'
+            "(default: load all possible frame channels in the data path)"
+        }
     )
     channel_weights: Optional[str] = field(
         default=None,
@@ -131,6 +145,12 @@ class SpeechDLMConfig(FairseqDataclass):
             'e.g., "train,valid" (default: all dataset splits)'
         },
     )
+    num_code: int = field(
+        default=1,
+        metadata={
+            "help": "number of predicted codecs (hubert tokens are always 1)"
+        },
+    )
     # TODO common vars below add to parent
     seed: int = II("common.seed")
     dataset_impl: Optional[ChoiceEnum(get_available_dataset_impl())] = II(
@@ -166,17 +186,20 @@ class SpeechDLMTask(LegacyFairseqTask):
         at examples/textless_nlp/dgslm .
     """
 
-    def __init__(self, args, dicts, output_dicts=None, ctc_dicts=None, targets=None):
+    def __init__(self, args, unit_dicts, output_dicts=None, ctc_dicts=None, targets=None):
         super().__init__(args)
-        self.dicts = dicts
-        self.output_dicts = output_dicts or dicts
+        self.unit_dicts = unit_dicts
+        self.output_dicts = output_dicts or unit_dicts
         self.ctc_dicts = ctc_dicts
+        self.num_code = args.num_code
 
         if targets is None:
             targets = ["next"]
         self.targets = targets
 
-        self.channels = list(dicts.keys())
+        self.channels = list(self.unit_dicts.keys())
+        self.text_channels = None if not args.text_channels else sorted(args.text_channels.split(","))
+        self.frame_channels = None if not args.frame_channels else sorted(args.frame_channels.split(","))
 
         if args.channel_weights is not None:
             self.channel_weights = [float(w) for w in args.channel_weights.split(",")]
@@ -233,50 +256,67 @@ class SpeechDLMTask(LegacyFairseqTask):
 
         dicts = None
         output_dicts = None
-        if args.channels is None:
-            sorted_channels = sorted(
+        if args.unit_channels is None:
+            sorted_unit_channels = sorted(
                 name[5:-4]
                 for name in os.listdir(data_path)
-                if name[:5] == "dict." and name[-4:] == ".txt"
+                if name[:9] == "dict.unit" and name[-4:] == ".txt"
             )
         else:
-            sorted_channels = sorted(args.channels.split(","))
-        logger.info("channels: {}".format(sorted_channels))
+            sorted_unit_channels = sorted(args.unit_channels.split(","))
+        logger.info("unit_channels: {}".format(sorted_unit_channels))
+
+        if args.ctc_prediction == "True":
+            if args.text_channels is None:
+                sorted_text_channels = sorted(
+                    name[5:-4]
+                    for name in os.listdir(data_path)
+                    if name[:9] == "dict.text" and name[-4:] == ".txt"
+                )
+                sorted_frame_channels = sorted(
+                    name[5:-4]
+                    for name in os.listdir(data_path)
+                    if name[:9] == "dict.time" and name[-4:] == ".txt"
+                )
+            else:
+                sorted_text_channels = sorted(args.text_channels.split(","))
+                sorted_frame_channels = sorted(args.frame_channels.split(","))
+            logger.info("text_channels: {}".format(sorted_text_channels))
+            logger.info("frame_channels: {}".format(sorted_frame_channels))
+        
         # load dictionaries
         dicts = OrderedDict()
         output_dicts = OrderedDict()
+        ctc_dicts = None
         if args.ctc_prediction == "True":
             ctc_dicts = OrderedDict()
-        for channel in sorted_channels:
-            unit_dict = Dictionary.load(
-                os.path.join(data_path, "dict.{}.txt".format(channel))
-            )
-            logger.info("[{}] dictionary: {} types".format(channel, len(unit_dict)))
-
-            if args.ctc_prediction == "True":
+            for uc, tc in zip(sorted_unit_channels, sorted_text_channels):
                 text_dict = Dictionary.load(
-                    os.path.join(data_path, "dict.{}.txt".format(channel.replace("unit", "text")))
+                    os.path.join(data_path, "dict.{}.txt".format(tc))
                 )
-                logger.info("[{}] dictionary: {} types".format(channel.replace("unit", "text"), len(text_dict)))
-            
+                logger.info("[{}] dictionary: {} types".format(tc, len(text_dict)))
+                ctc_dicts[uc] = text_dict
+
+        for uc in sorted_unit_channels:
+            unit_dict = Dictionary.load(
+                os.path.join(data_path, "dict.{}.txt".format(uc))
+            )
+            logger.info("[{}] dictionary: {} types".format(uc, len(unit_dict)))
             output_dictionary = unit_dict
             if args.output_dictionary_size >= 0:
                 output_dictionary = TruncatedDictionary(
                     unit_dict, args.output_dictionary_size
                 )
-            dicts[channel] = unit_dict
-            output_dicts[channel] = output_dictionary
-            if args.ctc_prediction == "True":
-                ctc_dicts[channel] = text_dict
+            dicts[uc] = unit_dict
+            output_dicts[uc] = output_dictionary
+
             if len(dicts) > 0:
-                assert dicts[channel].pad() == dicts[sorted_channels[0]].pad()
-                assert dicts[channel].bos() == dicts[sorted_channels[0]].bos()
-                assert dicts[channel].eos() == dicts[sorted_channels[0]].eos()
-                assert dicts[channel].unk() == dicts[sorted_channels[0]].unk()
-        if args.ctc_prediction == "True":
-            return (dicts, output_dicts, ctc_dicts)
-        else:
-            return (dicts, output_dicts, None)
+                assert dicts[uc].pad() == dicts[sorted_unit_channels[0]].pad()
+                assert dicts[uc].bos() == dicts[sorted_unit_channels[0]].bos()
+                assert dicts[uc].eos() == dicts[sorted_unit_channels[0]].eos()
+                assert dicts[uc].unk() == dicts[sorted_unit_channels[0]].unk()
+
+        return (dicts, output_dicts, ctc_dicts)
 
     @classmethod
     def setup_task(cls, args, **kwargs):
@@ -324,57 +364,61 @@ class SpeechDLMTask(LegacyFairseqTask):
 
         channel_unit_datasets = {}
         channel_text_datasets = {}
-        channel_time_datasets = {}
-        for channel in self.channels:
-            unit_path = os.path.join(data_path, split + "." + channel)
-            text_path = os.path.join(data_path, split + "." + channel.replace("unit", "text"))
-            time_path = os.path.join(data_path, split + "." + channel.replace("unit", "time"))
-            in_dict = self.dicts[channel]
-            text_dict = self.ctc_dicts[channel]
-            
+        channel_frame_datasets = {}
+
+        iterator = zip(self.channels, self.text_channels, self.frame_channels) if self.ctc_prediction else zip(self.channels, ['' for _ in self.channels], ['' for _ in self.channels])
+        for channel, text_channel, frame_channel in iterator:
+            if self.num_code == 1:
+                unit_paths = [os.path.join(data_path, split + "." + channel)]
+            else:
+                unit_paths = [os.path.join(data_path, split + "-" + str(i) + "." + channel) for i in range(self.num_code)]
+            text_path = os.path.join(data_path, split + "." + text_channel)
+            frame_path = os.path.join(data_path, split + "." + frame_channel)
+            in_dict = self.unit_dicts[channel]
+            text_dict = None if not self.ctc_prediction else self.ctc_dicts[channel]
+
             out_dict = self.output_dicts[channel]
-            unit_dataset = data_utils.load_indexed_dataset(
+            unit_datasets = [data_utils.load_indexed_dataset(
                 unit_path, in_dict, self.args.dataset_impl, combine=combine
-            )
+            ) for unit_path in unit_paths]
             text_dataset = data_utils.load_indexed_dataset(
                 text_path, text_dict, self.args.dataset_impl, combine=combine
             )
 
-            time_dataset = []
-            try:
-                with open(time_path) as f:
+            frame_dataset = []
+            if os.path.exists(frame_path) and self.ctc_prediction:
+                with open(frame_path) as f:
                     for line in f.readlines():
                         durs = line.strip().split()
-                        times = {'start': [], 'end': []}
+                        frames = {'start': [], 'end': []}
                         for dur in durs:
                             start, end = map(int, dur.split(':'))
-                            times['start'].append(start)
-                            times['end'].append(end)
-                        time_dataset.append(times)
-            except:
-                pass
+                            frames['start'].append(start)
+                            frames['end'].append(end)
+                        frame_dataset.append(frames)
 
-            if unit_dataset is None:
-                raise FileNotFoundError(
-                    "[{}] Unit Dataset not found: {} ({})".format(channel, split, unit_path)
-                )
+            for i, unit_dataset in enumerate(unit_datasets):
+                if unit_dataset is None:
+                    raise FileNotFoundError(
+                        "[{}] Unit Dataset not found: {} ({})".format(channel, split, unit_paths[i])
+                    )
             if text_dataset is None and self.ctc_prediction:
                 raise FileNotFoundError(
                     "[{}] Text Dataset not found: {} ({})".format(channel, split, text_path)
                 )
-            if len(time_dataset) == 0 and self.ctc_prediction:
+            if len(frame_dataset) == 0 and self.ctc_prediction:
                 raise FileNotFoundError(
-                    "[{}] Time Dataset not found: {} ({})".format(channel, split, time_path)
+                    "[{}] Time Dataset not found: {} ({})".format(channel, split, frame_path)
                 )
             
-            unit_dataset = maybe_shorten_dataset(
+            unit_datasets = [maybe_shorten_dataset(
                 unit_dataset,
                 split,
                 self.args.shorten_data_split_list,
                 self.args.shorten_method,
                 self.args.tokens_per_sample,
                 self.args.seed,
-            )
+            ) for unit_dataset in unit_datasets]
 
             text_dataset = maybe_shorten_dataset(
                 text_dataset,
@@ -385,7 +429,7 @@ class SpeechDLMTask(LegacyFairseqTask):
                 self.args.seed,
             )
 
-            unit_dataset = TokenBlockDataset(
+            unit_datasets = [TokenBlockDataset(
                 unit_dataset,
                 unit_dataset.sizes,
                 self.args.tokens_per_sample,
@@ -393,14 +437,14 @@ class SpeechDLMTask(LegacyFairseqTask):
                 eos=in_dict.eos(),
                 break_mode=self.args.sample_break_mode,
                 include_targets=True,
-            )
+            ) for unit_dataset in unit_datasets]
 
             add_eos_for_other_targets = (
                 self.args.sample_break_mode is not None
                 and self.args.sample_break_mode != "none"
             )
 
-            channel_unit_datasets[channel] = MonolingualDataset(
+            channel_unit_datasets[channel] = [MonolingualDataset(
                 dataset=unit_dataset,
                 sizes=unit_dataset.sizes,
                 src_vocab=in_dict,
@@ -409,23 +453,20 @@ class SpeechDLMTask(LegacyFairseqTask):
                 shuffle=False,
                 targets=["future"],
                 add_bos_token=self.args.add_bos_token,
-            )
+            ) for unit_dataset in unit_datasets]
 
             channel_text_datasets[channel] = text_dataset
-            channel_time_datasets[channel] = time_dataset
-        for channel in channel_unit_datasets:
-            for unit, text, time in zip(channel_unit_datasets[channel], channel_text_datasets[channel], channel_time_datasets[channel]):
-                if time['end'][-1] >= unit["source"].size(0):
-                    breakpoint()
+            channel_frame_datasets[channel] = frame_dataset
 
         self.datasets[split] = SpeechDLMDataset(
             unit_datasets=channel_unit_datasets,
             text_datasets=channel_text_datasets,
-            time_datasets=channel_time_datasets,
+            frame_datasets=channel_frame_datasets,
+            num_code=self.num_code,
             targets=self.targets,
             max_target_durations=self.max_target_durations,
             shuffle=True,
-            sep=self.text_dictionary.indices["<SEP>"],
+            sep=None if self.text_dictionary is None else self.text_dictionary.indices["[SEP]"],
         )
 
     def build_dataset_for_inference(self, src_tokens, src_lengths, **kwargs):
@@ -572,7 +613,7 @@ class SpeechDLMTask(LegacyFairseqTask):
     def source_dictionary(self):
         """Return the :class:`~fairseq.data.Dictionary` for the language
         model."""
-        return self.dicts[self.channels[0]]
+        return self.unit_dicts[self.channels[0]]
 
     @property
     def target_dictionary(self):
@@ -584,13 +625,13 @@ class SpeechDLMTask(LegacyFairseqTask):
     def text_dictionary(self):
         """Return the :class:`~fairseq.data.Dictionary` for the language
         model."""
-        return self.ctc_dicts[self.channels[0]]
+        return None if not self.ctc_prediction else self.ctc_dicts[self.channels[0]]
 
     @property
     def source_dictionaries(self):
         """Return the dict of :class:`~fairseq.data.Dictionary` for the
         multichannel language model."""
-        return self.dicts
+        return self.unit_dicts
 
     @property
     def target_dictionaries(self):
